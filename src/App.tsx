@@ -3,7 +3,7 @@ import { useFileSystem } from './hooks/useFileSystem';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { saveDownload, getAllDownloadedEpisodes, getAudioBlob, deleteDownload } from './services/storageService';
 import type { Podcast, Episode, PlaybackProgress } from './types';
-import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive } from 'lucide-react';
+import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save } from 'lucide-react';
 
 // Sub-component for individual episodes to prevent entire list re-renders
 const EpisodeItem = React.memo(({ 
@@ -58,8 +58,18 @@ const EpisodeItem = React.memo(({
 });
 
 export default function App() {
-  const isSupported = 'showOpenFilePicker' in window;
-  const { state, fileHandle, selectFile, createNewFile, updateState } = useFileSystem();
+  const { 
+    state, 
+    fileHandle, 
+    isLoading, 
+    storageMode, 
+    isFileSystemAccessSupported,
+    selectFile, 
+    createNewFile, 
+    updateState,
+    exportState,
+    importState
+  } = useFileSystem();
 
   const [viewMode, setViewMode] = useState<'search' | 'downloads'>('search');
   const [searchQuery, setSearchQuery] = useState('');
@@ -104,10 +114,10 @@ export default function App() {
   }, [isPlaying, currentEpisode]);
 
   const saveProgress = useCallback((episodeUrl: string, currentTime: number, duration: number) => {
-    if (!fileHandle) return;
+    if (!storageMode) return;
     const progress: PlaybackProgress = { episodeUrl, currentTime, duration, lastUpdated: Date.now() };
     updateState({ ...state, playbackProgress: { ...state.playbackProgress, [episodeUrl]: progress } });
-  }, [fileHandle, updateState, state]);
+  }, [storageMode, updateState, state]);
 
   const togglePlay = useCallback(() => {
     if (audioRef.current) {
@@ -209,17 +219,15 @@ export default function App() {
       setAllEpisodes(fetchedEpisodes);
       setIsLoadingEpisodes(false);
 
-      // Performance Optimization: If the feed is small, load it all at once
       if (fetchedEpisodes.length <= 100) {
         setEpisodes(fetchedEpisodes);
       } else {
-        // For large feeds, load first 20 immediately
         const initialChunk = fetchedEpisodes.slice(0, 20);
         setEpisodes(initialChunk);
 
         let currentIndex = 20;
         const chunkSize = 50;
-        const autoLimit = 120; // Auto-load more for big feeds initially
+        const autoLimit = 120;
 
         const loadNextAutoChunk = () => {
           if (activeFeedRef.current !== podcast.feedUrl) return;
@@ -232,7 +240,7 @@ export default function App() {
           currentIndex = nextIndex;
 
           if (currentIndex < autoLimit && currentIndex < fetchedEpisodes.length) {
-            setTimeout(loadNextAutoChunk, 150); // Give the UI more time to breathe
+            setTimeout(loadNextAutoChunk, 150);
           }
         };
 
@@ -250,9 +258,6 @@ export default function App() {
   const handleDownload = async (episode: Episode) => {
     setDownloadingIds(prev => new Set(prev).add(episode.id));
     try {
-      // Direct fetch bypasses CORS proxy if server supports it. If it doesn't, many podcasts still allow it. 
-      // For broad compatibility, we might need a proxy for audio too, but typically audio isn't CORS restricted 
-      // if fetched directly as a media element, though fetch() requires CORS. Let's try direct fetch first.
       const res = await fetch(episode.audioUrl);
       if (!res.ok) throw new Error('Network response was not ok');
       const blob = await res.blob();
@@ -261,7 +266,6 @@ export default function App() {
       setDownloadedEpisodes(newDeps);
     } catch (err) {
       console.error('Download failed', err);
-      // Optional: alert user or set error state
     } finally {
       setDownloadingIds(prev => {
         const next = new Set(prev);
@@ -275,7 +279,6 @@ export default function App() {
     await deleteDownload(episodeId);
     const newDeps = await getAllDownloadedEpisodes();
     setDownloadedEpisodes(newDeps);
-    // If we are playing the deleted episode, it will keep playing the cached blob URL until song changes.
   };
 
   const playEpisode = useCallback(async (episode: Episode) => {
@@ -295,7 +298,6 @@ export default function App() {
     if (audioRef.current) {
       const savedProgress = state.playbackProgress[episode.audioUrl];
       
-      // Cleanup previous blob URL to avoid memory leaks
       if (audioRef.current.src.startsWith('blob:')) {
         URL.revokeObjectURL(audioRef.current.src);
       }
@@ -307,12 +309,10 @@ export default function App() {
         if (blob) {
           audioRef.current.src = URL.createObjectURL(blob);
         } else {
-          // Fallback if blob is missing for some reason
           audioRef.current.src = episode.audioUrl;
         }
       } else {
         audioRef.current.src = episode.audioUrl;
-        // Optionally start download automatically in background:
         handleDownload(episode);
       }
       
@@ -324,7 +324,7 @@ export default function App() {
       }
       audioRef.current.play().catch(console.error);
     }
-  }, [currentEpisode, state.playbackProgress, fileHandle, downloadedEpisodes, togglePlay, saveProgress, state.subscriptions, selectedPodcast]);
+  }, [currentEpisode, state.playbackProgress, storageMode, downloadedEpisodes, togglePlay, saveProgress, state.subscriptions, selectedPodcast]);
 
   const handleImportOPML = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -349,19 +349,29 @@ export default function App() {
     a.href = url;
     a.download = 'subscriptions.opml';
     a.click();
+    URL.revokeObjectURL(url);
   };
 
-  if (!isSupported) {
+  const handleImportState = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await importState(file);
+      e.target.value = ''; // Reset input
+    }
+  };
+
+  // If loading OPFS or waiting for user to select file on desktop
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
-        <AlertCircle size={48} className="text-red-500 mb-4" />
-        <h1 className="text-2xl font-bold">Browser Not Supported</h1>
-        <p className="text-slate-400 mt-2">Please use Chrome or Edge for local file features.</p>
+        <Loader2 className="animate-spin text-blue-500 mb-4" size={48} />
+        <h1 className="text-xl font-bold">Loading your library...</h1>
       </div>
     );
   }
 
-  if (!fileHandle) {
+  // Initial Entry Screen (Desktop with File System Access)
+  if (isFileSystemAccessSupported && !fileHandle) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white text-center">
         <h1 className="text-5xl font-black mb-12 bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
@@ -385,17 +395,17 @@ export default function App() {
         <div className="p-6 border-b border-slate-800 font-bold flex justify-between items-center">
           <span className="tracking-tight">Subscriptions</span>
           <div className="flex space-x-2 text-slate-500">
-            <label className="cursor-pointer hover:text-white transition-colors">
+            <label className="cursor-pointer hover:text-white transition-colors" title="Import OPML">
               <Upload size={16} />
               <input type="file" className="hidden" onChange={handleImportOPML} accept=".opml,.xml" />
             </label>
-            <button onClick={handleExportOPML} className="hover:text-white transition-colors">
+            <button onClick={handleExportOPML} className="hover:text-white transition-colors" title="Export OPML">
               <Download size={16} />
             </button>
           </div>
         </div>
         
-        <div className="p-4 border-b border-slate-800">
+        <div className="p-4 border-b border-slate-800 flex flex-col space-y-2">
            <button 
              onClick={() => setViewMode('downloads')}
              className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-colors ${viewMode === 'downloads' ? 'bg-blue-600' : 'hover:bg-slate-800 text-slate-300'}`}
@@ -420,6 +430,22 @@ export default function App() {
               </button>
             </div>
           ))}
+        </div>
+
+        {/* Data Portability Section */}
+        <div className="p-4 border-t border-slate-800 bg-slate-950/30">
+          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 px-2">Data Portability</div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-800 hover:bg-slate-700 cursor-pointer transition-colors text-slate-300">
+              <FileJson size={16} className="mb-1" />
+              <span className="text-[10px] font-bold">Import</span>
+              <input type="file" className="hidden" accept=".json" onChange={handleImportState} />
+            </label>
+            <button onClick={exportState} className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-800 hover:bg-slate-700 transition-colors text-slate-300">
+              <Save size={16} className="mb-1" />
+              <span className="text-[10px] font-bold">Export</span>
+            </button>
+          </div>
         </div>
       </aside>
 
