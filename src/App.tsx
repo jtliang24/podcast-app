@@ -1,8 +1,38 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useFileSystem } from './hooks/useFileSystem';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import type { Podcast, Episode, PlaybackProgress } from './types';
-import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle } from 'lucide-react';
+import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown } from 'lucide-react';
+
+// Sub-component for individual episodes to prevent entire list re-renders
+const EpisodeItem = React.memo(({ 
+  episode, 
+  isCurrent, 
+  isPlaying, 
+  onPlay 
+}: { 
+  episode: Episode, 
+  isCurrent: boolean, 
+  isPlaying: boolean, 
+  onPlay: (e: Episode) => void 
+}) => {
+  const dateStr = useMemo(() => new Date(episode.pubDate).toLocaleDateString(), [episode.pubDate]);
+  
+  return (
+    <button 
+      onClick={() => onPlay(episode)} 
+      className={`w-full text-left p-4 rounded-xl hover:bg-white/5 flex items-center justify-between group transition-colors ${isCurrent ? 'bg-blue-500/10' : ''}`}
+    >
+      <div className="flex-1 min-w-0 mr-4">
+        <div className={`font-bold text-sm truncate ${isCurrent ? 'text-blue-400' : 'text-slate-200'}`}>{episode.title}</div>
+        <div className="text-[10px] text-slate-500 mt-1">{dateStr}</div>
+      </div>
+      <div className={`p-2 rounded-full transition-all ${isCurrent ? 'bg-blue-600 shadow-lg scale-110' : 'bg-slate-800 opacity-0 group-hover:opacity-100'}`}>
+        {isCurrent && isPlaying ? <Pause size={16} fill="currentColor"/> : <Play size={16} fill="currentColor" className="ml-0.5"/>}
+      </div>
+    </button>
+  );
+});
 
 export default function App() {
   const isSupported = 'showOpenFilePicker' in window;
@@ -11,17 +41,85 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Podcast[]>([]);
   const [selectedPodcast, setSelectedPodcast] = useState<Podcast | null>(null);
+  const activeFeedRef = useRef<string | null>(null);
+  const [allEpisodes, setAllEpisodes] = useState<Episode[]>([]);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
 
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.code === 'ArrowRight') {
+        skip(30);
+      } else if (e.code === 'ArrowLeft') {
+        skip(-15);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlaying, currentEpisode]);
+
+  const togglePlay = () => {
+    if (audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.pause();
+        saveProgress(currentEpisode!.audioUrl, audioRef.current.currentTime, audioRef.current.duration);
+      } else {
+        audioRef.current.play().catch(console.error);
+      }
+      setIsPlaying(!isPlaying);
+    }
+  };
+
+  const skip = (seconds: number) => {
+    if (audioRef.current) {
+      audioRef.current.currentTime += seconds;
+      setCurrentTime(audioRef.current.currentTime);
+    }
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const time = parseFloat(e.target.value);
+    if (audioRef.current) {
+      audioRef.current.currentTime = time;
+      setCurrentTime(time);
+    }
+  };
+
+  const formatTime = (time: number) => {
+    if (isNaN(time)) return '0:00';
+    const mins = Math.floor(time / 60);
+    const secs = Math.floor(time % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Fast UI updates
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (audioRef.current && isPlaying) {
+        setCurrentTime(audioRef.current.currentTime);
+      }
+    }, 500);
+    return () => clearInterval(interval);
+  }, [isPlaying]);
+
+  // Slow DISK updates
   useEffect(() => {
     const interval = setInterval(() => {
       if (audioRef.current && currentEpisode && isPlaying) {
         saveProgress(currentEpisode.audioUrl, audioRef.current.currentTime, audioRef.current.duration);
       }
-    }, 5000);
+    }, 10000);
     return () => clearInterval(interval);
   }, [currentEpisode, isPlaying]);
 
@@ -34,6 +132,7 @@ export default function App() {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery) return;
+    setError(null);
     const results = await searchPodcasts(searchQuery);
     setSearchResults(results);
   };
@@ -45,23 +144,114 @@ export default function App() {
     setSearchQuery('');
   };
 
-  const selectPodcast = async (podcast: Podcast) => {
-    setSelectedPodcast(podcast);
-    try {
-      const { episodes } = await fetchPodcastFeed(podcast.feedUrl);
-      setEpisodes(episodes);
-    } catch (e) { console.error(e); }
+  const handleUnsubscribe = async (feedUrl: string) => {
+    updateState({ ...state, subscriptions: state.subscriptions.filter(s => s.feedUrl !== feedUrl) });
+    if (selectedPodcast?.feedUrl === feedUrl) setSelectedPodcast(null);
   };
 
-  const playEpisode = (episode: Episode) => {
+  const loadMoreEpisodes = useCallback(() => {
+    if (episodes.length < allEpisodes.length) {
+      const nextChunk = allEpisodes.slice(episodes.length, episodes.length + 100);
+      setEpisodes(prev => [...prev, ...nextChunk]);
+    }
+  }, [episodes.length, allEpisodes]);
+
+  const selectPodcast = async (podcast: Podcast) => {
+    setSelectedPodcast(podcast);
+    activeFeedRef.current = podcast.feedUrl;
+    setEpisodes([]);
+    setAllEpisodes([]);
+    setError(null);
+    setIsLoadingEpisodes(true);
+    
+    try {
+      const { episodes: fetchedEpisodes } = await fetchPodcastFeed(podcast.feedUrl);
+      if (activeFeedRef.current !== podcast.feedUrl) return;
+
+      setAllEpisodes(fetchedEpisodes);
+      setIsLoadingEpisodes(false);
+
+      // Performance Optimization: If the feed is small, load it all at once
+      if (fetchedEpisodes.length <= 100) {
+        setEpisodes(fetchedEpisodes);
+      } else {
+        // For large feeds, load first 20 immediately
+        const initialChunk = fetchedEpisodes.slice(0, 20);
+        setEpisodes(initialChunk);
+
+        let currentIndex = 20;
+        const chunkSize = 50;
+        const autoLimit = 120; // Auto-load more for big feeds initially
+
+        const loadNextAutoChunk = () => {
+          if (activeFeedRef.current !== podcast.feedUrl) return;
+          if (currentIndex >= autoLimit || currentIndex >= fetchedEpisodes.length) return;
+
+          const nextIndex = Math.min(currentIndex + chunkSize, autoLimit, fetchedEpisodes.length);
+          const nextChunk = fetchedEpisodes.slice(currentIndex, nextIndex);
+          
+          setEpisodes(prev => [...prev, ...nextChunk]);
+          currentIndex = nextIndex;
+
+          if (currentIndex < autoLimit && currentIndex < fetchedEpisodes.length) {
+            setTimeout(loadNextAutoChunk, 150); // Give the UI more time to breathe
+          }
+        };
+
+        setTimeout(loadNextAutoChunk, 100);
+      }
+    } catch (e) { 
+      if (activeFeedRef.current === podcast.feedUrl) {
+        console.error(e); 
+        setError('Failed to load feed. It may be too large or the proxy may be busy.');
+        setIsLoadingEpisodes(false);
+      }
+    }
+  };
+
+  const playEpisode = useCallback((episode: Episode) => {
+    if (audioRef.current && currentEpisode) {
+      saveProgress(currentEpisode.audioUrl, audioRef.current.currentTime, audioRef.current.duration);
+    }
+
     setCurrentEpisode(episode);
     setIsPlaying(true);
     if (audioRef.current) {
       const savedProgress = state.playbackProgress[episode.audioUrl];
       audioRef.current.src = episode.audioUrl;
-      if (savedProgress) audioRef.current.currentTime = savedProgress.currentTime;
+      if (savedProgress) {
+        audioRef.current.currentTime = savedProgress.currentTime;
+        setCurrentTime(savedProgress.currentTime);
+      } else {
+        setCurrentTime(0);
+      }
       audioRef.current.play().catch(console.error);
     }
+  }, [currentEpisode, state.playbackProgress, fileHandle]);
+
+  const handleImportOPML = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const feedUrls = parseOPML(text);
+    for (const url of feedUrls) {
+      if (!state.subscriptions.find(s => s.feedUrl === url)) {
+        try {
+          const { podcast } = await fetchPodcastFeed(url);
+          updateState({ ...state, subscriptions: [...state.subscriptions, podcast] });
+        } catch (e) { console.error(e); }
+      }
+    }
+  };
+
+  const handleExportOPML = () => {
+    const opml = generateOPML(state.subscriptions);
+    const blob = new Blob([opml], { type: 'text/xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'subscriptions.opml';
+    a.click();
   };
 
   if (!isSupported) {
@@ -69,23 +259,23 @@ export default function App() {
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
         <AlertCircle size={48} className="text-red-500 mb-4" />
         <h1 className="text-2xl font-bold">Browser Not Supported</h1>
-        <p className="text-slate-400 mt-2">Please use a Chromium-based browser (Chrome, Edge, etc.) for local file features.</p>
+        <p className="text-slate-400 mt-2">Please use Chrome or Edge for local file features.</p>
       </div>
     );
   }
 
   if (!fileHandle) {
     return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white text-center">
         <h1 className="text-5xl font-black mb-12 bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
           Podcast Player
         </h1>
-        <div className="bg-slate-800 p-10 rounded-3xl border border-slate-700 shadow-2xl flex flex-col space-y-6 max-w-sm w-full">
-          <button onClick={selectFile} className="bg-blue-600 hover:bg-blue-700 p-5 rounded-2xl flex items-center justify-center font-bold text-lg">
-            <FolderOpen className="mr-3" /> Open File
+        <div className="bg-slate-800 p-10 rounded-3xl border border-slate-700 shadow-2xl flex flex-col space-y-6 max-w-sm w-full mx-auto">
+          <button onClick={selectFile} className="bg-blue-600 hover:bg-blue-700 p-5 rounded-2xl flex items-center justify-center font-bold text-lg transition-transform hover:scale-105 active:scale-95">
+            <FolderOpen className="mr-3" /> Open State File
           </button>
-          <button onClick={createNewFile} className="bg-slate-700 hover:bg-slate-600 p-5 rounded-2xl flex items-center justify-center font-bold text-lg">
-            <Plus className="mr-3" /> New File
+          <button onClick={createNewFile} className="bg-slate-700 hover:bg-slate-600 p-5 rounded-2xl flex items-center justify-center font-bold text-lg transition-transform hover:scale-105 active:scale-95">
+            <Plus className="mr-3" /> Create New File
           </button>
         </div>
       </div>
@@ -93,81 +283,170 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex">
-      <aside className="w-64 border-r border-slate-800 flex flex-col">
-        <div className="p-6 border-b border-slate-800 font-bold">Subscriptions</div>
-        <div className="flex-1 overflow-y-auto">
-          {state.subscriptions.map(p => (
-            <button key={p.feedUrl} onClick={() => selectPodcast(p)} className="w-full text-left p-4 hover:bg-slate-800 flex items-center space-x-3">
-              <img src={p.artworkUrl} className="w-10 h-10 rounded shadow-lg" alt="" />
-              <div className="truncate text-sm font-medium">{p.title}</div>
+    <div className="min-h-screen bg-slate-950 text-white flex select-none font-sans overflow-hidden">
+      <aside className="w-64 border-r border-slate-800 flex flex-col bg-slate-900">
+        <div className="p-6 border-b border-slate-800 font-bold flex justify-between items-center">
+          <span className="tracking-tight">Subscriptions</span>
+          <div className="flex space-x-2 text-slate-500">
+            <label className="cursor-pointer hover:text-white transition-colors">
+              <Upload size={16} />
+              <input type="file" className="hidden" onChange={handleImportOPML} accept=".opml,.xml" />
+            </label>
+            <button onClick={handleExportOPML} className="hover:text-white transition-colors">
+              <Download size={16} />
             </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          {state.subscriptions.map(p => (
+            <div key={p.feedUrl} className="group relative">
+              <button 
+                onClick={() => selectPodcast(p)} 
+                className={`w-full text-left p-4 hover:bg-white/5 flex items-center space-x-3 transition-colors ${selectedPodcast?.feedUrl === p.feedUrl ? 'bg-white/10' : ''}`}
+              >
+                <img src={p.artworkUrl} className="w-10 h-10 rounded shadow-lg bg-slate-800" alt="" />
+                <div className="truncate text-xs font-bold">{p.title}</div>
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); handleUnsubscribe(p.feedUrl); }} className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400">
+                <Trash2 size={14} />
+              </button>
+            </div>
           ))}
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col pb-28 overflow-hidden">
-        <header className="p-6 flex items-center justify-center">
-          <form onSubmit={handleSearch} className="relative w-full max-w-lg">
-            <Search className="absolute left-4 top-3.5 text-slate-500" size={18} />
+      <main className="flex-1 flex flex-col pb-32 overflow-hidden">
+        <header className="p-6 flex flex-col items-center bg-slate-950/50">
+          <form onSubmit={handleSearch} className="relative w-full max-w-lg group">
+            <Search className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-blue-500 transition-colors" size={18} />
             <input 
               value={searchQuery} 
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-3 pl-12 pr-4 outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-3 pl-12 pr-4 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
               placeholder="Search podcasts..."
             />
           </form>
+          {error && (
+            <div className="mt-4 flex items-center text-red-400 bg-red-400/10 px-4 py-2 rounded-xl text-xs border border-red-400/20">
+              <AlertCircle size={14} className="mr-2" /> {error}
+            </div>
+          )}
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
           {searchResults.length > 0 ? (
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
               {searchResults.map(p => (
-                <div key={p.feedUrl} className="bg-slate-800 p-4 rounded-2xl border border-slate-700 group hover:scale-105 transition-all">
-                  <img src={p.artworkUrl} className="w-full aspect-square rounded-xl shadow-lg mb-4" alt="" />
+                <div key={p.feedUrl} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 group hover:border-slate-700 transition-all">
+                  <div className="relative overflow-hidden rounded-xl mb-4">
+                    <img src={p.artworkUrl} className="w-full aspect-square shadow-lg bg-slate-800" alt="" />
+                    <button onClick={() => handleSubscribe(p)} className="absolute bottom-2 right-2 bg-blue-600 p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"><Plus size={20}/></button>
+                  </div>
                   <h3 className="font-bold truncate text-sm mb-1">{p.title}</h3>
-                  <button onClick={() => handleSubscribe(p)} className="w-full mt-4 bg-blue-600 hover:bg-blue-700 py-2 rounded-xl text-sm font-bold">Subscribe</button>
+                  <p className="text-[10px] text-slate-500 truncate">{p.author}</p>
                 </div>
               ))}
             </div>
           ) : selectedPodcast ? (
             <div>
-              <div className="flex items-end space-x-6 mb-12">
-                <img src={selectedPodcast.artworkUrl} className="w-48 h-48 rounded-2xl shadow-2xl" alt="" />
-                <h1 className="text-4xl font-black mb-2">{selectedPodcast.title}</h1>
+              <div className="flex items-end space-x-8 mb-12">
+                <img src={selectedPodcast.artworkUrl} className="w-48 h-48 rounded-2xl shadow-2xl bg-slate-800" alt="" />
+                <div className="pb-2">
+                  <h1 className="text-4xl font-black mb-2 tracking-tight">{selectedPodcast.title}</h1>
+                  <p className="text-slate-400 font-bold">{selectedPodcast.author}</p>
+                </div>
               </div>
-              <div className="space-y-2">
+              
+              <div className="space-y-1">
+                {isLoadingEpisodes && (
+                  <div className="flex items-center justify-center py-12 text-blue-500">
+                    <Loader2 className="animate-spin mr-2" />
+                    <span className="font-bold text-sm">Fetching Episodes...</span>
+                  </div>
+                )}
                 {episodes.map(e => (
-                  <button key={e.id} onClick={() => playEpisode(e)} className="w-full text-left p-4 rounded-xl hover:bg-white/5 flex items-center justify-between group">
-                    <span className="font-bold text-sm truncate">{e.title}</span>
-                    <Play className="opacity-0 group-hover:opacity-100 transition-all text-blue-500" fill="currentColor" size={20} />
-                  </button>
+                  <EpisodeItem 
+                    key={e.id} 
+                    episode={e} 
+                    isCurrent={currentEpisode?.id === e.id} 
+                    isPlaying={isPlaying} 
+                    onPlay={playEpisode} 
+                  />
                 ))}
+
+                {episodes.length < allEpisodes.length && !isLoadingEpisodes && (
+                  <div className="py-8 flex justify-center">
+                    <button 
+                      onClick={loadMoreEpisodes}
+                      className="flex items-center space-x-2 px-8 py-3 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-2xl font-bold text-sm transition-all"
+                    >
+                      <ChevronDown size={18} />
+                      <span>Load More ({allEpisodes.length - episodes.length} left)</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-slate-500">
-               <Search size={64} className="mb-4 opacity-10" />
-               <p className="text-xl font-bold">Find a podcast to start listening</p>
+               <Search size={64} className="mb-4 opacity-5" />
+               <p className="text-lg font-bold opacity-20 text-center">Find something to listen to</p>
             </div>
           )}
         </div>
       </main>
 
       {currentEpisode && (
-        <footer className="fixed bottom-0 left-0 right-0 bg-slate-800/90 backdrop-blur-xl border-t border-slate-700 p-6 flex items-center justify-between">
-          <div className="flex items-center space-x-4 w-1/3">
-            <img src={selectedPodcast?.artworkUrl} className="w-12 h-12 rounded shadow-lg" alt="" />
-            <div className="min-w-0">
-              <div className="font-bold truncate text-sm">{currentEpisode.title}</div>
-              <div className="text-xs text-blue-400 font-bold">{selectedPodcast?.title}</div>
+        <footer className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-6 z-50">
+          <div className="max-w-screen-2xl mx-auto flex flex-col items-center">
+            <div className="w-full flex items-center justify-between mb-2">
+              <div className="flex items-center space-x-4 w-1/3 min-w-0">
+                <img src={selectedPodcast?.artworkUrl} className="w-12 h-12 rounded shadow-lg bg-slate-800" alt="" />
+                <div className="min-w-0">
+                  <div className="font-bold truncate text-sm">{currentEpisode.title}</div>
+                  <div className="text-[10px] text-blue-400 font-bold truncate uppercase tracking-wider">{selectedPodcast?.title}</div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-center space-x-10 w-1/3">
+                <button onClick={() => skip(-15)} className="text-slate-500 hover:text-white transition-colors flex flex-col items-center">
+                  <RotateCcw size={22} />
+                  <span className="text-[8px] font-black mt-1">15s</span>
+                </button>
+                <button onClick={togglePlay} className="bg-white text-slate-900 w-14 h-14 rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-xl">
+                  {isPlaying ? <Pause fill="currentColor" size={28} /> : <Play fill="currentColor" size={28} className="ml-1" />}
+                </button>
+                <button onClick={() => skip(30)} className="text-slate-500 hover:text-white transition-colors flex flex-col items-center">
+                  <RotateCw size={22} />
+                  <span className="text-[8px] font-black mt-1">30s</span>
+                </button>
+              </div>
+
+              <div className="w-1/3 flex justify-end items-center text-[10px] font-mono font-bold text-slate-500">
+                <span className="bg-slate-800 px-2 py-1 rounded">{formatTime(currentTime)} / {formatTime(duration)}</span>
+              </div>
+            </div>
+
+            <div className="w-full max-w-2xl px-4 flex items-center group">
+              <input 
+                type="range"
+                min="0"
+                max={duration || 0}
+                step="0.1"
+                value={currentTime}
+                onChange={handleSeek}
+                className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all"
+              />
             </div>
           </div>
-          <button onClick={() => { if (audioRef.current) { if (isPlaying) audioRef.current.pause(); else audioRef.current.play(); setIsPlaying(!isPlaying); } }} className="bg-white text-slate-900 w-12 h-12 rounded-full flex items-center justify-center hover:scale-110 active:scale-95 transition-all">
-            {isPlaying ? <Pause fill="currentColor" size={24} /> : <Play fill="currentColor" size={24} className="ml-1" />}
-          </button>
-          <div className="w-1/3" />
-          <audio ref={audioRef} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} className="hidden" />
+          <audio 
+            ref={audioRef} 
+            onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
+            onPlay={() => setIsPlaying(true)} 
+            onPause={() => setIsPlaying(false)} 
+            onEnded={() => setIsPlaying(false)}
+            className="hidden" 
+          />
         </footer>
       )}
     </div>
