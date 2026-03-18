@@ -1,11 +1,11 @@
 # Podcast Player Project Overview
 
-A portable, local-first podcast listening application built with **React**, **TypeScript**, and **Vite**. The app is designed for performance and portability, storing all user data (subscriptions and playback progress) in a single, user-selected JSON file via the **File System Access API**.
+A portable, local-first podcast listening application built with **React**, **TypeScript**, and **Vite**. The app is designed for performance and portability, storing all user data (subscriptions and playback progress) in a single, user-selected JSON file via the **File System Access API** (Desktop) or **Origin Private File System** (Mobile).
 
 ## Core Technologies
 - **Frontend:** React 19, TypeScript, Tailwind CSS
 - **Build Tool:** Vite 6
-- **Data Persistence (Synced):** File System Access API (Native browser API for local file I/O)
+- **Data Persistence (Synced):** File System Access API (Desktop) and Origin Private File System (OPFS, Mobile)
 - **Data Persistence (Local/Offline):** **IndexedDB** (for storing episode metadata and audio blobs)
 - **Data Parsing:** `fast-xml-parser` (for RSS feeds and OPML files)
 - **Podcast Discovery:** iTunes Search API
@@ -14,19 +14,19 @@ A portable, local-first podcast listening application built with **React**, **Ty
 
 ## Architecture
 The application follows a "local-first" architecture with a hybrid storage model:
-1.  **State Management (Synced):** App state (subscriptions, playback progress) is managed in a local JSON file. This allows users to sync their metadata by placing the file in a cloud-synced folder (e.g., Google Drive, Dropbox).
+1.  **State Management (Synced):** App state (subscriptions, playback progress) is managed in a local JSON file (Desktop) or internally in the browser's OPFS (Mobile). Data portability is ensured via manual **Import/Export** of the state JSON.
 2.  **Download Management (Device-Specific):** Audio files and their associated metadata are stored in **IndexedDB**. This ensures downloads are persistent across sessions but remain specific to the local device (they are not synced via the JSON file).
 3.  **Service Layer:** 
     - `src/services/podcastService.ts`: Handles RSS/OPML parsing and iTunes search logic. Uses CORS proxies for browser compatibility.
     - `src/services/storageService.ts`: Manages the IndexedDB lifecycle for offline episode storage.
-4.  **Persistence Hook:** `src/hooks/useFileSystem.ts` abstracts the File System Access API for the synced state file.
+4.  **Persistence Hook:** `src/hooks/useFileSystem.ts` abstracts the platform-specific storage logic (File System Access vs. OPFS).
 5.  **Playback Logic:** 
     - Automatically checks for offline audio in IndexedDB before streaming from the web.
     - Initiates background downloads when playing a remote episode.
     - Periodically auto-saves playback position to the local state file (throttled to once every 10 seconds for performance).
 
 ## Project Structure
-- `src/hooks/useFileSystem.ts`: Handles synced JSON state file reading/writing.
+- `src/hooks/useFileSystem.ts`: Handles synced JSON state file reading/writing across platforms.
 - `src/services/podcastService.ts`: RSS/OPML parsing and iTunes search logic.
 - `src/services/storageService.ts`: IndexedDB wrapper for offline downloads.
 - `src/types.ts`: TypeScript interfaces for Podcasts, Episodes, and App State.
@@ -48,6 +48,7 @@ The project uses **Nix** for a consistent development environment.
 - `npm run build`: Compiles the project using `tsc` and Vite for production.
 - `npm run lint`: Runs ESLint for code quality checks.
 - `npm run preview`: Previews the production build locally.
+- **`npm run start-app`**: Builds the app and launches it in a standalone window (App Mode).
 
 ## Development Conventions
 - **Type Safety:** Strict TypeScript is enforced.
