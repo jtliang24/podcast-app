@@ -1,4 +1,6 @@
-{ pkgs ? import <nixpkgs> {} }:
+{
+  pkgs ? import <nixpkgs> { },
+}:
 
 pkgs.mkShell {
   buildInputs = [
@@ -11,7 +13,7 @@ pkgs.mkShell {
 
   shellHook = ''
     echo "⚡ Podcast App Dev Environment"
-    
+
     # Automatically install npm dependencies if node_modules doesn't exist
     if [ ! -d "node_modules" ]; then
       echo "📦 node_modules not found. Installing..."
@@ -20,7 +22,7 @@ pkgs.mkShell {
 
     # Add node_modules binaries to PATH
     export PATH="$PWD/node_modules/.bin:$PATH"
-    
-    echo "✅ Environment ready. Run 'npm run dev' to start."
+
+    echo "✅ Environment ready. Run 'npm run start-app' to start."
   '';
 }
