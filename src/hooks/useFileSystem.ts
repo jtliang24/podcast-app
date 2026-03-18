@@ -29,8 +29,8 @@ export function useFileSystem() {
       const file = await fileHandle.getFile();
       const text = await file.text();
       if (text) {
-        const parsed = JSON.parse(text) as AppState;
-        setState(parsed);
+        const parsed = JSON.parse(text) as Partial<AppState>;
+        setState({ ...INITIAL_STATE, ...parsed });
       } else {
         // New file, save initial state
         await saveToOPFS(INITIAL_STATE);
@@ -103,8 +103,8 @@ export function useFileSystem() {
     try {
       const file = await handle.getFile();
       const text = await file.text();
-      const parsed = JSON.parse(text) as AppState;
-      setState(parsed);
+      const parsed = JSON.parse(text) as Partial<AppState>;
+      setState({ ...INITIAL_STATE, ...parsed });
     } catch (err) {
       console.error('Error loading state:', err);
       setState(INITIAL_STATE);
