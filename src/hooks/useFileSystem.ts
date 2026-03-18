@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { AppState } from '../types';
 import { INITIAL_STATE } from '../types';
 
@@ -9,6 +9,12 @@ export function useFileSystem() {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const [isLoading, setIsLoading] = useState(false);
   const [storageMode, setStorageMode] = useState<StorageMode | null>(null);
+
+  // Keep state in a ref to always have the latest version for functional updates and I/O
+  const stateRef = useRef<AppState>(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // Check support on mount
   const isFileSystemAccessSupported = 'showOpenFilePicker' in window;
@@ -30,7 +36,8 @@ export function useFileSystem() {
       const text = await file.text();
       if (text) {
         const parsed = JSON.parse(text) as Partial<AppState>;
-        setState({ ...INITIAL_STATE, ...parsed });
+        const newState = { ...INITIAL_STATE, ...parsed };
+        setState(newState);
       } else {
         // New file, save initial state
         await saveToOPFS(INITIAL_STATE);
@@ -47,7 +54,6 @@ export function useFileSystem() {
     try {
       const root = await navigator.storage.getDirectory();
       const fileHandle = await root.getFileHandle('podcast_state.json', { create: true });
-      // @ts-ignore - createWritable might not be in all type definitions yet but is in OPFS spec
       const writable = await fileHandle.createWritable();
       await writable.write(JSON.stringify(newState, null, 2));
       await writable.close();
@@ -124,7 +130,13 @@ export function useFileSystem() {
     }
   };
 
-  const updateState = useCallback(async (newState: AppState) => {
+  const updateState = useCallback(async (update: AppState | ((prev: AppState) => AppState)) => {
+    const newState = typeof update === 'function' ? update(stateRef.current) : update;
+    
+    // Immediate state update for UI responsiveness
+    setState(newState);
+    
+    // Persist to disk
     if (storageMode === 'file-system-access' && fileHandle) {
       await saveState(fileHandle, newState);
     } else if (storageMode === 'opfs') {
@@ -146,7 +158,7 @@ export function useFileSystem() {
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as AppState;
-      await updateState(parsed);
+      await updateState(() => parsed);
     } catch (err) {
       console.error('Error importing state:', err);
     }

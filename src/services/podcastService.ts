@@ -16,7 +16,7 @@ const xmlParser = new XMLParser({
 });
 
 export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podcast, episodes: Episode[] }> {
-  let lastError: any;
+  let lastError: unknown;
 
   for (const proxy of PROXIES) {
     try {
@@ -40,8 +40,8 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
 
       const items = Array.isArray(channel.item) ? channel.item : [channel.item].filter(Boolean);
 
-      const episodes: Episode[] = items.map((item: any) => ({
-        id: String(item.guid?.['#text'] || item.guid || item.link || item.enclosure?.['@_url'] || Math.random()),
+      const episodes: Episode[] = items.map((item: { guid?: { '#text'?: string } | string, link?: string, enclosure?: { '@_url'?: string }, title?: string, pubDate?: string, description?: string, 'content:encoded'?: string, 'itunes:duration'?: string | number }) => ({
+        id: String(item.guid instanceof Object ? item.guid['#text'] : item.guid || item.link || item.enclosure?.['@_url'] || Math.random()),
         podcastId: feedUrl,
         title: String(item.title || 'Untitled Episode'),
         pubDate: String(item.pubDate || ''),
@@ -75,7 +75,7 @@ export async function searchPodcasts(query: string): Promise<Podcast[]> {
   try {
     const response = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=podcast&limit=15`);
     const data = await response.json();
-    return data.results.map((item: any) => ({
+    return data.results.map((item: { feedUrl: string, collectionName: string, artistName: string, artworkUrl600?: string, artworkUrl100?: string }) => ({
       id: item.feedUrl,
       title: item.collectionName,
       author: item.artistName,
@@ -91,22 +91,34 @@ export async function searchPodcasts(query: string): Promise<Podcast[]> {
 
 export function parseOPML(opmlText: string): string[] {
   try {
-    const jsonObj = xmlParser.parse(opmlText);
-    const outlines = jsonObj.opml?.body?.outline || [];
+    const jsonObj = xmlParser.parse(opmlText) as Record<string, unknown>;
     const feeds: string[] = [];
 
-    const traverse = (item: any) => {
+    const traverse = (item: unknown) => {
       if (Array.isArray(item)) {
         item.forEach(traverse);
-      } else if (item) {
-        if (item['@_xmlUrl']) feeds.push(item['@_xmlUrl']);
-        if (item.outline) traverse(item.outline);
+      } else if (item && typeof item === 'object') {
+        const obj = item as Record<string, unknown>;
+        // Try to find the feed URL in common OPML attribute variations
+        const xmlUrl = obj['@_xmlUrl'] || obj['@_xmlurl'] || obj['@_XMLURL'];
+        if (xmlUrl) {
+          feeds.push(String(xmlUrl));
+        }
+        
+        // Continue traversing all properties to find nested outlines or other structures
+        Object.keys(obj).forEach(key => {
+          if (key !== '@_xmlUrl' && key !== '@_xmlurl' && key !== '@_XMLURL') {
+            traverse(obj[key]);
+          }
+        });
       }
     };
 
-    traverse(outlines);
-    return feeds;
+    traverse(jsonObj);
+    // Return unique URLs
+    return [...new Set(feeds)];
   } catch (err) {
+    console.error('Error parsing OPML:', err);
     return [];
   }
 }

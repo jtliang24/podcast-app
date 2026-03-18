@@ -54,7 +54,7 @@ export async function getAllDownloadedEpisodes(): Promise<Episode[]> {
     request.onsuccess = (event) => {
       const records = (event.target as IDBRequest).result || [];
       // Extract just the metadata
-      resolve(records.map((r: any) => r.episode));
+      resolve(records.map((r: { episode: Episode }) => r.episode));
     };
     request.onerror = (event) => reject((event.target as IDBRequest).error);
   });

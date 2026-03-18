@@ -25,7 +25,13 @@ const EpisodeItem = React.memo(({
   onDeleteDownload: (id: string) => void,
   onAddToQueue: (e: Episode, position: 'top' | 'bottom') => void
 }) => {
-  const dateStr = useMemo(() => new Date(episode.pubDate).toLocaleDateString(), [episode.pubDate]);
+  const dateStr = useMemo(() => {
+    try {
+      return new Date(episode.pubDate).toLocaleDateString();
+    } catch (e) {
+      return 'Unknown date';
+    }
+  }, [episode.pubDate]);
   const [showMenu, setShowMenu] = useState(false);
   
   return (
@@ -123,6 +129,8 @@ export default function App() {
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
 
+  const [importingStatus, setImportingStatus] = useState<string | null>(null);
+
   // Load downloads on mount
   useEffect(() => {
     getAllDownloadedEpisodes().then(deps => setDownloadedEpisodes(deps)).catch(console.error);
@@ -148,8 +156,8 @@ export default function App() {
   const saveProgress = useCallback((episodeUrl: string, currentTime: number, duration: number) => {
     if (!storageMode) return;
     const progress: PlaybackProgress = { episodeUrl, currentTime, duration, lastUpdated: Date.now() };
-    updateState({ ...state, playbackProgress: { ...state.playbackProgress, [episodeUrl]: progress } });
-  }, [storageMode, updateState, state]);
+    updateState(prev => ({ ...prev, playbackProgress: { ...prev.playbackProgress, [episodeUrl]: progress } }));
+  }, [storageMode, updateState]);
 
   const togglePlay = useCallback(() => {
     if (audioRef.current) {
@@ -223,12 +231,21 @@ export default function App() {
     setIsAddingByUrl(true);
     try {
       const { podcast } = await fetchPodcastFeed(urlInput);
-      if (state.subscriptions.find(s => s.feedUrl === podcast.feedUrl)) {
+      let alreadySubscribed = false;
+      await updateState(prev => {
+        if (prev.subscriptions.some(s => s.feedUrl === podcast.feedUrl)) {
+          alreadySubscribed = true;
+          return prev;
+        }
+        return { ...prev, subscriptions: [...prev.subscriptions, podcast] };
+      });
+      
+      if (alreadySubscribed) {
         setError('Already subscribed to this podcast');
         setIsAddingByUrl(false);
         return;
       }
-      updateState({ ...state, subscriptions: [...state.subscriptions, podcast] });
+
       setUrlInput('');
       selectPodcast(podcast);
     } catch (err) {
@@ -240,14 +257,19 @@ export default function App() {
   };
 
   const handleSubscribe = async (podcast: Podcast) => {
-    if (state.subscriptions.find(s => s.feedUrl === podcast.feedUrl)) return;
-    updateState({ ...state, subscriptions: [...state.subscriptions, podcast] });
+    updateState(prev => {
+      if (prev.subscriptions.some(s => s.feedUrl === podcast.feedUrl)) return prev;
+      return { ...prev, subscriptions: [...prev.subscriptions, podcast] };
+    });
     setSearchResults([]);
     setSearchQuery('');
   };
 
   const handleUnsubscribe = async (feedUrl: string) => {
-    updateState({ ...state, subscriptions: state.subscriptions.filter(s => s.feedUrl !== feedUrl) });
+    updateState(prev => ({ 
+      ...prev, 
+      subscriptions: prev.subscriptions.filter(s => s.feedUrl !== feedUrl) 
+    }));
     if (selectedPodcast?.feedUrl === feedUrl) setSelectedPodcast(null);
   };
 
@@ -383,26 +405,30 @@ export default function App() {
 
   // Queue management
   const addToQueue = useCallback((episode: Episode, position: 'top' | 'bottom') => {
-    if (state.queue.find(e => e.id === episode.id)) return;
-    const newQueue = position === 'top' ? [episode, ...state.queue] : [...state.queue, episode];
-    updateState({ ...state, queue: newQueue });
-  }, [state, updateState]);
+    updateState(prev => {
+      if (prev.queue.find(e => e.id === episode.id)) return prev;
+      const newQueue = position === 'top' ? [episode, ...prev.queue] : [...prev.queue, episode];
+      return { ...prev, queue: newQueue };
+    });
+  }, [updateState]);
 
   const removeFromQueue = useCallback((episodeId: string) => {
-    updateState({ ...state, queue: state.queue.filter(e => e.id !== episodeId) });
-  }, [state, updateState]);
+    updateState(prev => ({ ...prev, queue: prev.queue.filter(e => e.id !== episodeId) }));
+  }, [updateState]);
 
   const reorderQueue = useCallback((episodeId: string, direction: 'up' | 'down') => {
-    const index = state.queue.findIndex(e => e.id === episodeId);
-    if (index === -1) return;
-    if (direction === 'up' && index === 0) return;
-    if (direction === 'down' && index === state.queue.length - 1) return;
+    updateState(prev => {
+      const index = prev.queue.findIndex(e => e.id === episodeId);
+      if (index === -1) return prev;
+      if (direction === 'up' && index === 0) return prev;
+      if (direction === 'down' && index === prev.queue.length - 1) return prev;
 
-    const newQueue = [...state.queue];
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    [newQueue[index], newQueue[targetIndex]] = [newQueue[targetIndex], newQueue[index]];
-    updateState({ ...state, queue: newQueue });
-  }, [state, updateState]);
+      const newQueue = [...prev.queue];
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      [newQueue[index], newQueue[targetIndex]] = [newQueue[targetIndex], newQueue[index]];
+      return { ...prev, queue: newQueue };
+    });
+  }, [updateState]);
 
   // Auto-download queued episodes
   useEffect(() => {
@@ -418,8 +444,7 @@ export default function App() {
   const handleEpisodeEnded = useCallback(() => {
     if (state.queue.length > 0) {
       const nextEpisode = state.queue[0];
-      const newQueue = state.queue.slice(1);
-      updateState({ ...state, queue: newQueue });
+      updateState(prev => ({ ...prev, queue: prev.queue.slice(1) }));
       playEpisode(nextEpisode);
     } else {
       setIsPlaying(false);
@@ -431,14 +456,42 @@ export default function App() {
     if (!file) return;
     const text = await file.text();
     const feedUrls = parseOPML(text);
-    for (const url of feedUrls) {
-      if (!state.subscriptions.find(s => s.feedUrl === url)) {
-        try {
-          const { podcast } = await fetchPodcastFeed(url);
-          updateState({ ...state, subscriptions: [...state.subscriptions, podcast] });
-        } catch (e) { console.error(e); }
+    
+    if (feedUrls.length === 0) {
+      setError('No podcast feeds found in the OPML file.');
+      return;
+    }
+
+    setImportingStatus(`Found ${feedUrls.length} feeds. Starting import...`);
+    
+    let updatedCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < feedUrls.length; i++) {
+      const url = feedUrls[i];
+      setImportingStatus(`Importing ${i + 1}/${feedUrls.length}: ${url}`);
+      
+      try {
+        const { podcast } = await fetchPodcastFeed(url);
+        let wasAdded = false;
+        await updateState(prev => {
+          if (prev.subscriptions.some(s => s.feedUrl === url)) {
+            return prev; // Already subscribed
+          }
+          wasAdded = true;
+          return { ...prev, subscriptions: [...prev.subscriptions, podcast] };
+        });
+        if (wasAdded) updatedCount++;
+      } catch (err) {
+        console.error(`Failed to import feed from ${url}:`, err);
+        failCount++;
       }
     }
+    
+    setImportingStatus(`Import complete. Added ${updatedCount} podcasts.${failCount > 0 ? ` (${failCount} failed)` : ''}`);
+    setTimeout(() => setImportingStatus(null), 5000);
+    
+    e.target.value = '';
   };
 
   const handleExportOPML = () => {
@@ -551,7 +604,7 @@ export default function App() {
 
       <main className="flex-1 flex flex-col pb-32 overflow-hidden">
         <header className="p-6 flex flex-col items-center bg-slate-950/50">
-          <div className="w-full max-w-lg flex flex-col space-y-4">
+          <div className="w-full max-lg flex flex-col space-y-4">
             <form onSubmit={handleSearch} className="relative w-full group">
               <Search className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-blue-500 transition-colors" size={18} />
               <input 
@@ -586,8 +639,13 @@ export default function App() {
             </form>
           </div>
           {error && (
-            <div className="mt-4 flex items-center text-red-400 bg-red-400/10 px-4 py-2 rounded-xl text-xs border border-red-400/20">
+            <div className="mt-4 flex items-center text-red-400 bg-red-400/10 px-4 py-2 rounded-xl text-xs border border-red-400/20 animate-in fade-in slide-in-from-top-1">
               <AlertCircle size={14} className="mr-2" /> {error}
+            </div>
+          )}
+          {importingStatus && (
+            <div className="mt-4 flex items-center text-blue-400 bg-blue-400/10 px-4 py-2 rounded-xl text-xs border border-blue-400/20 animate-in fade-in slide-in-from-top-1">
+              <Loader2 size={14} className="mr-2 animate-spin" /> {importingStatus}
             </div>
           )}
         </header>
