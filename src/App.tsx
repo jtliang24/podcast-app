@@ -3,7 +3,7 @@ import { useFileSystem } from './hooks/useFileSystem';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { saveDownload, getAllDownloadedEpisodes, getAudioBlob, deleteDownload } from './services/storageService';
 import type { Podcast, Episode, PlaybackProgress } from './types';
-import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save } from 'lucide-react';
+import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save, List, X, ChevronUp, MoreVertical } from 'lucide-react';
 
 // Sub-component for individual episodes to prevent entire list re-renders
 const EpisodeItem = React.memo(({ 
@@ -13,7 +13,8 @@ const EpisodeItem = React.memo(({
   onPlay,
   downloadStatus,
   onDownload,
-  onDeleteDownload
+  onDeleteDownload,
+  onAddToQueue
 }: { 
   episode: Episode, 
   isCurrent: boolean, 
@@ -21,9 +22,11 @@ const EpisodeItem = React.memo(({
   onPlay: (e: Episode) => void,
   downloadStatus: 'none' | 'downloading' | 'downloaded',
   onDownload: (e: Episode) => void,
-  onDeleteDownload: (id: string) => void
+  onDeleteDownload: (id: string) => void,
+  onAddToQueue: (e: Episode, position: 'top' | 'bottom') => void
 }) => {
   const dateStr = useMemo(() => new Date(episode.pubDate).toLocaleDateString(), [episode.pubDate]);
+  const [showMenu, setShowMenu] = useState(false);
   
   return (
     <div className={`w-full p-4 rounded-xl hover:bg-white/5 flex items-center justify-between group transition-colors ${isCurrent ? 'bg-blue-500/10' : ''}`}>
@@ -33,6 +36,32 @@ const EpisodeItem = React.memo(({
       </button>
       
       <div className="flex items-center space-x-2">
+        <div className="relative">
+          <button 
+            onClick={() => setShowMenu(!showMenu)} 
+            onBlur={() => setTimeout(() => setShowMenu(false), 200)}
+            className="p-2 rounded-full text-slate-400 hover:text-white bg-slate-800 opacity-0 group-hover:opacity-100 transition-all"
+          >
+            <MoreVertical size={16} />
+          </button>
+          {showMenu && (
+            <div className="absolute right-0 bottom-full mb-2 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
+              <button 
+                onClick={() => onAddToQueue(episode, 'top')}
+                className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-blue-600 transition-colors flex items-center"
+              >
+                <ChevronUp size={14} className="mr-2" /> Play Next
+              </button>
+              <button 
+                onClick={() => onAddToQueue(episode, 'bottom')}
+                className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-slate-700 border-t border-slate-700 transition-colors flex items-center"
+              >
+                <List size={14} className="mr-2" /> Add to Queue
+              </button>
+            </div>
+          )}
+        </div>
+
         {downloadStatus === 'none' && (
           <button onClick={() => onDownload(episode)} className="p-2 rounded-full text-slate-400 hover:text-white bg-slate-800 opacity-0 group-hover:opacity-100 transition-all">
             <ArrowDownToLine size={16} />
@@ -79,6 +108,7 @@ export default function App() {
   const [allEpisodes, setAllEpisodes] = useState<Episode[]>([]);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   
+  const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [downloadedEpisodes, setDownloadedEpisodes] = useState<Episode[]>([]);
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
 
@@ -326,6 +356,51 @@ export default function App() {
     }
   }, [currentEpisode, state.playbackProgress, storageMode, downloadedEpisodes, togglePlay, saveProgress, state.subscriptions, selectedPodcast]);
 
+  // Queue management
+  const addToQueue = useCallback((episode: Episode, position: 'top' | 'bottom') => {
+    if (state.queue.find(e => e.id === episode.id)) return;
+    const newQueue = position === 'top' ? [episode, ...state.queue] : [...state.queue, episode];
+    updateState({ ...state, queue: newQueue });
+  }, [state, updateState]);
+
+  const removeFromQueue = useCallback((episodeId: string) => {
+    updateState({ ...state, queue: state.queue.filter(e => e.id !== episodeId) });
+  }, [state, updateState]);
+
+  const reorderQueue = useCallback((episodeId: string, direction: 'up' | 'down') => {
+    const index = state.queue.findIndex(e => e.id === episodeId);
+    if (index === -1) return;
+    if (direction === 'up' && index === 0) return;
+    if (direction === 'down' && index === state.queue.length - 1) return;
+
+    const newQueue = [...state.queue];
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    [newQueue[index], newQueue[targetIndex]] = [newQueue[targetIndex], newQueue[index]];
+    updateState({ ...state, queue: newQueue });
+  }, [state, updateState]);
+
+  // Auto-download queued episodes
+  useEffect(() => {
+    const nextToDownload = state.queue.find(e => 
+      !downloadedEpisodes.some(d => d.id === e.id) && 
+      !downloadingIds.has(e.id)
+    );
+    if (nextToDownload) {
+      handleDownload(nextToDownload);
+    }
+  }, [state.queue, downloadedEpisodes, downloadingIds]);
+
+  const handleEpisodeEnded = useCallback(() => {
+    if (state.queue.length > 0) {
+      const nextEpisode = state.queue[0];
+      const newQueue = state.queue.slice(1);
+      updateState({ ...state, queue: newQueue });
+      playEpisode(nextEpisode);
+    } else {
+      setIsPlaying(false);
+    }
+  }, [state.queue, updateState, playEpisode]);
+
   const handleImportOPML = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -488,6 +563,7 @@ export default function App() {
                       downloadStatus="downloaded"
                       onDownload={handleDownload}
                       onDeleteDownload={handleDeleteDownload}
+                      onAddToQueue={addToQueue}
                     />
                   ))}
                 </div>
@@ -538,6 +614,7 @@ export default function App() {
                       downloadStatus={status}
                       onDownload={handleDownload}
                       onDeleteDownload={handleDeleteDownload}
+                      onAddToQueue={addToQueue}
                     />
                   );
                 })}
@@ -566,6 +643,43 @@ export default function App() {
 
       {currentEpisode && (
         <footer className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-6 z-50">
+          {isQueueOpen && (
+            <div className="absolute bottom-full right-6 mb-4 w-96 max-h-[70vh] bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
+              <div className="p-6 border-b border-slate-800 flex items-center justify-between bg-slate-800/50">
+                <div className="flex items-center space-x-2">
+                  <List size={20} className="text-blue-500" />
+                  <h3 className="font-bold">Play Queue</h3>
+                  <span className="bg-blue-600 text-[10px] px-2 py-0.5 rounded-full">{state.queue.length}</span>
+                </div>
+                <button onClick={() => setIsQueueOpen(false)} className="p-2 hover:bg-slate-700 rounded-full transition-colors">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
+                {state.queue.length === 0 ? (
+                  <div className="text-center py-12 text-slate-500">
+                    <List size={48} className="mx-auto mb-4 opacity-10" />
+                    <p className="text-sm font-bold opacity-20">Queue is empty</p>
+                  </div>
+                ) : (
+                  state.queue.map((e, i) => (
+                    <div key={e.id} className="group bg-slate-800/40 p-3 rounded-xl border border-slate-800/50 flex items-center space-x-3">
+                      <div className="text-[10px] font-mono font-black text-slate-600 w-4">{i + 1}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-bold truncate">{e.title}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{e.podcastId}</div>
+                      </div>
+                      <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => reorderQueue(e.id, 'up')} className="p-1 hover:text-blue-400"><ChevronUp size={14} /></button>
+                        <button onClick={() => reorderQueue(e.id, 'down')} className="p-1 hover:text-blue-400"><ChevronDown size={14} /></button>
+                        <button onClick={() => removeFromQueue(e.id)} className="p-1 hover:text-red-400 ml-1"><Trash2 size={14} /></button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
           <div className="max-w-screen-2xl mx-auto flex flex-col items-center">
             <div className="w-full flex items-center justify-between mb-2">
               <div className="flex items-center space-x-4 w-1/3 min-w-0">
@@ -590,7 +704,14 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="w-1/3 flex justify-end items-center text-[10px] font-mono font-bold text-slate-500">
+              <div className="w-1/3 flex justify-end items-center space-x-6 text-[10px] font-mono font-bold text-slate-500">
+                <button 
+                  onClick={() => setIsQueueOpen(!isQueueOpen)}
+                  className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg transition-colors ${isQueueOpen ? 'bg-blue-600 text-white' : 'bg-slate-800 hover:bg-slate-700'}`}
+                >
+                  <List size={14} />
+                  <span>Queue ({state.queue.length})</span>
+                </button>
                 <span className="bg-slate-800 px-2 py-1 rounded">{formatTime(currentTime)} / {formatTime(duration)}</span>
               </div>
             </div>
@@ -614,7 +735,7 @@ export default function App() {
         onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
         onPlay={() => setIsPlaying(true)} 
         onPause={() => setIsPlaying(false)} 
-        onEnded={() => setIsPlaying(false)}
+        onEnded={handleEpisodeEnded}
         className="hidden" 
       />
     </div>
