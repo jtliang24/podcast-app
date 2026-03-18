@@ -75,6 +75,7 @@ export default function App() {
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
+  const [playingPodcast, setPlayingPodcast] = useState<Podcast | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -287,6 +288,8 @@ export default function App() {
       saveProgress(currentEpisode.audioUrl, audioRef.current.currentTime, audioRef.current.duration);
     }
 
+    const podcast = state.subscriptions.find(s => s.feedUrl === episode.podcastId) || selectedPodcast;
+    setPlayingPodcast(podcast);
     setCurrentEpisode(episode);
     setIsPlaying(true);
     if (audioRef.current) {
@@ -321,7 +324,7 @@ export default function App() {
       }
       audioRef.current.play().catch(console.error);
     }
-  }, [currentEpisode, state.playbackProgress, fileHandle, downloadedEpisodes, togglePlay, saveProgress]);
+  }, [currentEpisode, state.playbackProgress, fileHandle, downloadedEpisodes, togglePlay, saveProgress, state.subscriptions, selectedPodcast]);
 
   const handleImportOPML = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -540,10 +543,10 @@ export default function App() {
           <div className="max-w-screen-2xl mx-auto flex flex-col items-center">
             <div className="w-full flex items-center justify-between mb-2">
               <div className="flex items-center space-x-4 w-1/3 min-w-0">
-                <img src={selectedPodcast?.artworkUrl || currentEpisode.audioUrl} className="w-12 h-12 rounded shadow-lg bg-slate-800" alt="" />
+                <img src={playingPodcast?.artworkUrl || currentEpisode.audioUrl} className="w-12 h-12 rounded shadow-lg bg-slate-800" alt="" />
                 <div className="min-w-0">
                   <div className="font-bold truncate text-sm">{currentEpisode.title}</div>
-                  <div className="text-[10px] text-blue-400 font-bold truncate uppercase tracking-wider">{selectedPodcast?.title || 'Unknown Podcast'}</div>
+                  <div className="text-[10px] text-blue-400 font-bold truncate uppercase tracking-wider">{playingPodcast?.title || 'Unknown Podcast'}</div>
                 </div>
               </div>
 
