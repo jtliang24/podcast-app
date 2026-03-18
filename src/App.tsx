@@ -3,27 +3,29 @@ import { useFileSystem } from './hooks/useFileSystem';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { saveDownload, getAllDownloadedEpisodes, getAudioBlob, deleteDownload } from './services/storageService';
 import type { Podcast, Episode, PlaybackProgress } from './types';
-import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save, List, X, ChevronUp, MoreVertical, Link as LinkIcon } from 'lucide-react';
+import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save, List, X, ChevronUp, MoreVertical, Link as LinkIcon, Podcast as PodcastIcon } from 'lucide-react';
 
 // Sub-component for individual episodes to prevent entire list re-renders
-const EpisodeItem = React.memo(({ 
-  episode, 
-  isCurrent, 
-  isPlaying, 
+const EpisodeItem = React.memo(({
+  episode,
+  isCurrent,
+  isPlaying,
   onPlay,
   downloadStatus,
   onDownload,
   onDeleteDownload,
-  onAddToQueue
-}: { 
-  episode: Episode, 
-  isCurrent: boolean, 
-  isPlaying: boolean, 
+  onAddToQueue,
+  artworkUrl
+}: {
+  episode: Episode,
+  isCurrent: boolean,
+  isPlaying: boolean,
   onPlay: (e: Episode) => void,
   downloadStatus: 'none' | 'downloading' | 'downloaded',
   onDownload: (e: Episode) => void,
   onDeleteDownload: (id: string) => void,
-  onAddToQueue: (e: Episode, position: 'top' | 'bottom') => void
+  onAddToQueue: (e: Episode, position: 'top' | 'bottom') => void,
+  artworkUrl?: string
 }) => {
   const dateStr = useMemo(() => {
     try {
@@ -33,13 +35,26 @@ const EpisodeItem = React.memo(({
     }
   }, [episode.pubDate]);
   const [showMenu, setShowMenu] = useState(false);
-  
+
   return (
     <div className={`w-full p-4 rounded-xl hover:bg-white/5 flex items-center justify-between group transition-colors ${isCurrent ? 'bg-blue-500/10' : ''}`}>
-      <button onClick={() => onPlay(episode)} className="flex-1 text-left min-w-0 mr-4 cursor-pointer">
-        <div className={`font-bold text-sm truncate ${isCurrent ? 'text-blue-400' : 'text-slate-200'}`}>{episode.title}</div>
-        <div className="text-[10px] text-slate-500 mt-1">{dateStr}</div>
-      </button>
+      <div className="flex items-center flex-1 min-w-0 mr-4">
+        {artworkUrl ? (
+          <img 
+            src={artworkUrl} 
+            className="w-10 h-10 rounded shadow-lg mr-4 bg-slate-800 flex-shrink-0 object-cover" 
+            alt="" 
+          />
+        ) : (
+          <div className="w-10 h-10 rounded shadow-lg mr-4 bg-slate-800 flex items-center justify-center flex-shrink-0 text-slate-500">
+            <PodcastIcon size={20} />
+          </div>
+        )}
+        <button onClick={() => onPlay(episode)} className="flex-1 text-left min-w-0 cursor-pointer">
+          <div className={`font-bold text-sm truncate ${isCurrent ? 'text-blue-400' : 'text-slate-200'}`}>{episode.title}</div>
+          <div className="text-[10px] text-slate-500 mt-1">{dateStr}</div>
+        </button>
+      </div>
       
       <div className="flex items-center space-x-2">
         <div className="relative">
@@ -661,19 +676,23 @@ export default function App() {
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {downloadedEpisodes.map(e => (
-                    <EpisodeItem 
-                      key={e.id} 
-                      episode={e} 
-                      isCurrent={currentEpisode?.id === e.id} 
-                      isPlaying={isPlaying} 
-                      onPlay={playEpisode}
-                      downloadStatus="downloaded"
-                      onDownload={handleDownload}
-                      onDeleteDownload={handleDeleteDownload}
-                      onAddToQueue={addToQueue}
-                    />
-                  ))}
+                  {downloadedEpisodes.map(e => {
+                    const podcast = state.subscriptions.find(s => s.feedUrl === e.podcastId);
+                    return (
+                      <EpisodeItem 
+                        key={e.id} 
+                        episode={e} 
+                        isCurrent={currentEpisode?.id === e.id} 
+                        isPlaying={isPlaying} 
+                        onPlay={playEpisode}
+                        downloadStatus="downloaded"
+                        onDownload={handleDownload}
+                        onDeleteDownload={handleDeleteDownload}
+                        onAddToQueue={addToQueue}
+                        artworkUrl={podcast?.artworkUrl}
+                      />
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -723,6 +742,7 @@ export default function App() {
                       onDownload={handleDownload}
                       onDeleteDownload={handleDeleteDownload}
                       onAddToQueue={addToQueue}
+                      artworkUrl={selectedPodcast.artworkUrl}
                     />
                   );
                 })}
@@ -770,20 +790,30 @@ export default function App() {
                     <p className="text-sm font-bold opacity-20">Queue is empty</p>
                   </div>
                 ) : (
-                  state.queue.map((e, i) => (
-                    <div key={e.id} className="group bg-slate-800/40 p-3 rounded-xl border border-slate-800/50 flex items-center space-x-3">
-                      <div className="text-[10px] font-mono font-black text-slate-600 w-4">{i + 1}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-bold truncate">{e.title}</div>
-                        <div className="text-[10px] text-slate-500 truncate">{e.podcastId}</div>
+                  state.queue.map((e, i) => {
+                    const podcast = state.subscriptions.find(s => s.feedUrl === e.podcastId);
+                    return (
+                      <div key={e.id} className="group bg-slate-800/40 p-3 rounded-xl border border-slate-800/50 flex items-center space-x-3">
+                        <div className="text-[10px] font-mono font-black text-slate-600 w-4">{i + 1}</div>
+                        {podcast?.artworkUrl ? (
+                          <img src={podcast.artworkUrl} className="w-8 h-8 rounded shadow-lg bg-slate-800 flex-shrink-0 object-cover" alt="" />
+                        ) : (
+                          <div className="w-8 h-8 rounded shadow-lg bg-slate-800 flex items-center justify-center flex-shrink-0 text-slate-600">
+                            <PodcastIcon size={16} />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-bold truncate">{e.title}</div>
+                          <div className="text-[10px] text-slate-500 truncate">{podcast?.title || e.podcastId}</div>
+                        </div>
+                        <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => reorderQueue(e.id, 'up')} className="p-1 hover:text-blue-400"><ChevronUp size={14} /></button>
+                          <button onClick={() => reorderQueue(e.id, 'down')} className="p-1 hover:text-blue-400"><ChevronDown size={14} /></button>
+                          <button onClick={() => removeFromQueue(e.id)} className="p-1 hover:text-red-400 ml-1"><Trash2 size={14} /></button>
+                        </div>
                       </div>
-                      <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => reorderQueue(e.id, 'up')} className="p-1 hover:text-blue-400"><ChevronUp size={14} /></button>
-                        <button onClick={() => reorderQueue(e.id, 'down')} className="p-1 hover:text-blue-400"><ChevronDown size={14} /></button>
-                        <button onClick={() => removeFromQueue(e.id)} className="p-1 hover:text-red-400 ml-1"><Trash2 size={14} /></button>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
