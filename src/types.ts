@@ -27,9 +27,11 @@ export interface PlaybackProgress {
 export interface AppState {
   subscriptions: Podcast[];
   playbackProgress: Record<string, PlaybackProgress>;
+  queue: Episode[];
 }
 
 export const INITIAL_STATE: AppState = {
   subscriptions: [],
   playbackProgress: {},
+  queue: [],
 };
