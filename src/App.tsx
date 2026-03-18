@@ -1,36 +1,59 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useFileSystem } from './hooks/useFileSystem';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
+import { saveDownload, getAllDownloadedEpisodes, getAudioBlob, deleteDownload } from './services/storageService';
 import type { Podcast, Episode, PlaybackProgress } from './types';
-import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown } from 'lucide-react';
+import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive } from 'lucide-react';
 
 // Sub-component for individual episodes to prevent entire list re-renders
 const EpisodeItem = React.memo(({ 
   episode, 
   isCurrent, 
   isPlaying, 
-  onPlay 
+  onPlay,
+  downloadStatus,
+  onDownload,
+  onDeleteDownload
 }: { 
   episode: Episode, 
   isCurrent: boolean, 
   isPlaying: boolean, 
-  onPlay: (e: Episode) => void 
+  onPlay: (e: Episode) => void,
+  downloadStatus: 'none' | 'downloading' | 'downloaded',
+  onDownload: (e: Episode) => void,
+  onDeleteDownload: (id: string) => void
 }) => {
   const dateStr = useMemo(() => new Date(episode.pubDate).toLocaleDateString(), [episode.pubDate]);
   
   return (
-    <button 
-      onClick={() => onPlay(episode)} 
-      className={`w-full text-left p-4 rounded-xl hover:bg-white/5 flex items-center justify-between group transition-colors ${isCurrent ? 'bg-blue-500/10' : ''}`}
-    >
-      <div className="flex-1 min-w-0 mr-4">
+    <div className={`w-full p-4 rounded-xl hover:bg-white/5 flex items-center justify-between group transition-colors ${isCurrent ? 'bg-blue-500/10' : ''}`}>
+      <button onClick={() => onPlay(episode)} className="flex-1 text-left min-w-0 mr-4 cursor-pointer">
         <div className={`font-bold text-sm truncate ${isCurrent ? 'text-blue-400' : 'text-slate-200'}`}>{episode.title}</div>
         <div className="text-[10px] text-slate-500 mt-1">{dateStr}</div>
+      </button>
+      
+      <div className="flex items-center space-x-2">
+        {downloadStatus === 'none' && (
+          <button onClick={() => onDownload(episode)} className="p-2 rounded-full text-slate-400 hover:text-white bg-slate-800 opacity-0 group-hover:opacity-100 transition-all">
+            <ArrowDownToLine size={16} />
+          </button>
+        )}
+        {downloadStatus === 'downloading' && (
+          <div className="p-2 text-blue-500">
+            <Loader2 size={16} className="animate-spin" />
+          </div>
+        )}
+        {downloadStatus === 'downloaded' && (
+          <button onClick={() => onDeleteDownload(episode.id)} className="p-2 rounded-full text-emerald-500 hover:text-red-400 transition-all" title="Delete Download">
+            <CheckCircle2 size={16} />
+          </button>
+        )}
+
+        <button onClick={() => onPlay(episode)} className={`p-2 rounded-full transition-all ${isCurrent ? 'bg-blue-600 shadow-lg scale-110' : 'bg-slate-800 opacity-0 group-hover:opacity-100'}`}>
+          {isCurrent && isPlaying ? <Pause size={16} fill="currentColor"/> : <Play size={16} fill="currentColor" className="ml-0.5"/>}
+        </button>
       </div>
-      <div className={`p-2 rounded-full transition-all ${isCurrent ? 'bg-blue-600 shadow-lg scale-110' : 'bg-slate-800 opacity-0 group-hover:opacity-100'}`}>
-        {isCurrent && isPlaying ? <Pause size={16} fill="currentColor"/> : <Play size={16} fill="currentColor" className="ml-0.5"/>}
-      </div>
-    </button>
+    </div>
   );
 });
 
@@ -38,12 +61,17 @@ export default function App() {
   const isSupported = 'showOpenFilePicker' in window;
   const { state, fileHandle, selectFile, createNewFile, updateState } = useFileSystem();
 
+  const [viewMode, setViewMode] = useState<'search' | 'downloads'>('search');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Podcast[]>([]);
   const [selectedPodcast, setSelectedPodcast] = useState<Podcast | null>(null);
   const activeFeedRef = useRef<string | null>(null);
   const [allEpisodes, setAllEpisodes] = useState<Episode[]>([]);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
+  
+  const [downloadedEpisodes, setDownloadedEpisodes] = useState<Episode[]>([]);
+  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
+
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
@@ -51,6 +79,11 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Load downloads on mount
+  useEffect(() => {
+    getAllDownloadedEpisodes().then(deps => setDownloadedEpisodes(deps)).catch(console.error);
+  }, []);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -131,6 +164,7 @@ export default function App() {
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
+    setViewMode('search');
     if (!searchQuery) return;
     setError(null);
     const results = await searchPodcasts(searchQuery);
@@ -157,6 +191,7 @@ export default function App() {
   }, [episodes.length, allEpisodes]);
 
   const selectPodcast = async (podcast: Podcast) => {
+    setViewMode('search');
     setSelectedPodcast(podcast);
     activeFeedRef.current = podcast.feedUrl;
     setEpisodes([]);
@@ -209,7 +244,38 @@ export default function App() {
     }
   };
 
-  const playEpisode = useCallback((episode: Episode) => {
+  const handleDownload = async (episode: Episode) => {
+    setDownloadingIds(prev => new Set(prev).add(episode.id));
+    try {
+      // Direct fetch bypasses CORS proxy if server supports it. If it doesn't, many podcasts still allow it. 
+      // For broad compatibility, we might need a proxy for audio too, but typically audio isn't CORS restricted 
+      // if fetched directly as a media element, though fetch() requires CORS. Let's try direct fetch first.
+      const res = await fetch(episode.audioUrl);
+      if (!res.ok) throw new Error('Network response was not ok');
+      const blob = await res.blob();
+      await saveDownload(episode, blob);
+      const newDeps = await getAllDownloadedEpisodes();
+      setDownloadedEpisodes(newDeps);
+    } catch (err) {
+      console.error('Download failed', err);
+      // Optional: alert user or set error state
+    } finally {
+      setDownloadingIds(prev => {
+        const next = new Set(prev);
+        next.delete(episode.id);
+        return next;
+      });
+    }
+  };
+
+  const handleDeleteDownload = async (episodeId: string) => {
+    await deleteDownload(episodeId);
+    const newDeps = await getAllDownloadedEpisodes();
+    setDownloadedEpisodes(newDeps);
+    // If we are playing the deleted episode, it will keep playing the cached blob URL until song changes.
+  };
+
+  const playEpisode = useCallback(async (episode: Episode) => {
     if (audioRef.current && currentEpisode) {
       saveProgress(currentEpisode.audioUrl, audioRef.current.currentTime, audioRef.current.duration);
     }
@@ -218,7 +284,28 @@ export default function App() {
     setIsPlaying(true);
     if (audioRef.current) {
       const savedProgress = state.playbackProgress[episode.audioUrl];
-      audioRef.current.src = episode.audioUrl;
+      
+      // Cleanup previous blob URL to avoid memory leaks
+      if (audioRef.current.src.startsWith('blob:')) {
+        URL.revokeObjectURL(audioRef.current.src);
+      }
+
+      const isDownloaded = downloadedEpisodes.some(d => d.id === episode.id);
+      
+      if (isDownloaded) {
+        const blob = await getAudioBlob(episode.id);
+        if (blob) {
+          audioRef.current.src = URL.createObjectURL(blob);
+        } else {
+          // Fallback if blob is missing for some reason
+          audioRef.current.src = episode.audioUrl;
+        }
+      } else {
+        audioRef.current.src = episode.audioUrl;
+        // Optionally start download automatically in background:
+        handleDownload(episode);
+      }
+      
       if (savedProgress) {
         audioRef.current.currentTime = savedProgress.currentTime;
         setCurrentTime(savedProgress.currentTime);
@@ -227,7 +314,7 @@ export default function App() {
       }
       audioRef.current.play().catch(console.error);
     }
-  }, [currentEpisode, state.playbackProgress, fileHandle]);
+  }, [currentEpisode, state.playbackProgress, fileHandle, downloadedEpisodes]);
 
   const handleImportOPML = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -297,12 +384,23 @@ export default function App() {
             </button>
           </div>
         </div>
+        
+        <div className="p-4 border-b border-slate-800">
+           <button 
+             onClick={() => setViewMode('downloads')}
+             className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-colors ${viewMode === 'downloads' ? 'bg-blue-600' : 'hover:bg-slate-800 text-slate-300'}`}
+           >
+             <HardDrive size={18} />
+             <span className="font-bold text-sm">Downloads</span>
+           </button>
+        </div>
+
         <div className="flex-1 overflow-y-auto custom-scrollbar">
           {state.subscriptions.map(p => (
             <div key={p.feedUrl} className="group relative">
               <button 
                 onClick={() => selectPodcast(p)} 
-                className={`w-full text-left p-4 hover:bg-white/5 flex items-center space-x-3 transition-colors ${selectedPodcast?.feedUrl === p.feedUrl ? 'bg-white/10' : ''}`}
+                className={`w-full text-left p-4 hover:bg-white/5 flex items-center space-x-3 transition-colors ${viewMode === 'search' && selectedPodcast?.feedUrl === p.feedUrl ? 'bg-white/10' : ''}`}
               >
                 <img src={p.artworkUrl} className="w-10 h-10 rounded shadow-lg bg-slate-800" alt="" />
                 <div className="truncate text-xs font-bold">{p.title}</div>
@@ -334,7 +432,32 @@ export default function App() {
         </header>
 
         <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-          {searchResults.length > 0 ? (
+          {viewMode === 'downloads' ? (
+            <div className="animate-in fade-in duration-500">
+              <h1 className="text-3xl font-black mb-8">Downloaded Episodes</h1>
+              {downloadedEpisodes.length === 0 ? (
+                <div className="flex flex-col items-center justify-center text-slate-500 mt-20">
+                   <HardDrive size={64} className="mb-4 opacity-10" />
+                   <p className="text-lg font-bold opacity-20">No downloads yet.</p>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {downloadedEpisodes.map(e => (
+                    <EpisodeItem 
+                      key={e.id} 
+                      episode={e} 
+                      isCurrent={currentEpisode?.id === e.id} 
+                      isPlaying={isPlaying} 
+                      onPlay={playEpisode}
+                      downloadStatus="downloaded"
+                      onDownload={handleDownload}
+                      onDeleteDownload={handleDeleteDownload}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : searchResults.length > 0 ? (
             <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
               {searchResults.map(p => (
                 <div key={p.feedUrl} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 group hover:border-slate-700 transition-all">
@@ -348,7 +471,7 @@ export default function App() {
               ))}
             </div>
           ) : selectedPodcast ? (
-            <div>
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="flex items-end space-x-8 mb-12">
                 <img src={selectedPodcast.artworkUrl} className="w-48 h-48 rounded-2xl shadow-2xl bg-slate-800" alt="" />
                 <div className="pb-2">
@@ -364,15 +487,24 @@ export default function App() {
                     <span className="font-bold text-sm">Fetching Episodes...</span>
                   </div>
                 )}
-                {episodes.map(e => (
-                  <EpisodeItem 
-                    key={e.id} 
-                    episode={e} 
-                    isCurrent={currentEpisode?.id === e.id} 
-                    isPlaying={isPlaying} 
-                    onPlay={playEpisode} 
-                  />
-                ))}
+                {episodes.map(e => {
+                  const isDownloaded = downloadedEpisodes.some(d => d.id === e.id);
+                  const isDownloading = downloadingIds.has(e.id);
+                  const status = isDownloaded ? 'downloaded' : (isDownloading ? 'downloading' : 'none');
+
+                  return (
+                    <EpisodeItem 
+                      key={e.id} 
+                      episode={e} 
+                      isCurrent={currentEpisode?.id === e.id} 
+                      isPlaying={isPlaying} 
+                      onPlay={playEpisode}
+                      downloadStatus={status}
+                      onDownload={handleDownload}
+                      onDeleteDownload={handleDeleteDownload}
+                    />
+                  );
+                })}
 
                 {episodes.length < allEpisodes.length && !isLoadingEpisodes && (
                   <div className="py-8 flex justify-center">
@@ -401,10 +533,10 @@ export default function App() {
           <div className="max-w-screen-2xl mx-auto flex flex-col items-center">
             <div className="w-full flex items-center justify-between mb-2">
               <div className="flex items-center space-x-4 w-1/3 min-w-0">
-                <img src={selectedPodcast?.artworkUrl} className="w-12 h-12 rounded shadow-lg bg-slate-800" alt="" />
+                <img src={selectedPodcast?.artworkUrl || currentEpisode.audioUrl} className="w-12 h-12 rounded shadow-lg bg-slate-800" alt="" />
                 <div className="min-w-0">
                   <div className="font-bold truncate text-sm">{currentEpisode.title}</div>
-                  <div className="text-[10px] text-blue-400 font-bold truncate uppercase tracking-wider">{selectedPodcast?.title}</div>
+                  <div className="text-[10px] text-blue-400 font-bold truncate uppercase tracking-wider">{selectedPodcast?.title || 'Unknown Podcast'}</div>
                 </div>
               </div>
 
