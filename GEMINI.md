@@ -5,24 +5,32 @@ A portable, local-first podcast listening application built with **React**, **Ty
 ## Core Technologies
 - **Frontend:** React 19, TypeScript, Tailwind CSS
 - **Build Tool:** Vite 6
-- **Data Persistence:** File System Access API (Native browser API for local file I/O)
+- **Data Persistence (Synced):** File System Access API (Native browser API for local file I/O)
+- **Data Persistence (Local/Offline):** **IndexedDB** (for storing episode metadata and audio blobs)
 - **Data Parsing:** `fast-xml-parser` (for RSS feeds and OPML files)
 - **Podcast Discovery:** iTunes Search API
 - **Icons:** Lucide React
 - **Environment:** Nix (via `shell.nix`)
 
 ## Architecture
-The application follows a "local-first" architecture:
-1.  **State Management:** App state (subscriptions, progress) is managed in a local JSON file. This allows users to sync their data by placing the file in a cloud-synced folder (e.g., Google Drive, Dropbox).
-2.  **Service Layer:** `src/services/podcastService.ts` handles all external data fetching and XML/RSS parsing. It uses a public CORS proxy (`api.allorigins.win`) to fetch RSS feeds directly in the browser.
-3.  **Persistence Hook:** `src/hooks/useFileSystem.ts` abstracts the File System Access API, providing methods to open, create, and auto-save the application state.
-4.  **Playback Logic:** A persistent global audio player in `App.tsx` tracks playback progress and auto-saves the current position every second to the local state file.
+The application follows a "local-first" architecture with a hybrid storage model:
+1.  **State Management (Synced):** App state (subscriptions, playback progress) is managed in a local JSON file. This allows users to sync their metadata by placing the file in a cloud-synced folder (e.g., Google Drive, Dropbox).
+2.  **Download Management (Device-Specific):** Audio files and their associated metadata are stored in **IndexedDB**. This ensures downloads are persistent across sessions but remain specific to the local device (they are not synced via the JSON file).
+3.  **Service Layer:** 
+    - `src/services/podcastService.ts`: Handles RSS/OPML parsing and iTunes search logic. Uses CORS proxies for browser compatibility.
+    - `src/services/storageService.ts`: Manages the IndexedDB lifecycle for offline episode storage.
+4.  **Persistence Hook:** `src/hooks/useFileSystem.ts` abstracts the File System Access API for the synced state file.
+5.  **Playback Logic:** 
+    - Automatically checks for offline audio in IndexedDB before streaming from the web.
+    - Initiates background downloads when playing a remote episode.
+    - Periodically auto-saves playback position to the local state file (throttled to once every 10 seconds for performance).
 
 ## Project Structure
-- `src/hooks/useFileSystem.ts`: Handles local JSON file reading/writing.
+- `src/hooks/useFileSystem.ts`: Handles synced JSON state file reading/writing.
 - `src/services/podcastService.ts`: RSS/OPML parsing and iTunes search logic.
+- `src/services/storageService.ts`: IndexedDB wrapper for offline downloads.
 - `src/types.ts`: TypeScript interfaces for Podcasts, Episodes, and App State.
-- `src/App.tsx`: Main UI layout, search, and playback controls.
+- `src/App.tsx`: Main UI layout, search, playback controls, and download management.
 - `shell.nix`: Reproducible development environment with Node.js 20 and npm.
 
 ## Building and Running
@@ -43,7 +51,8 @@ The project uses **Nix** for a consistent development environment.
 
 ## Development Conventions
 - **Type Safety:** Strict TypeScript is enforced.
-- **Import Style:** Use `import type` for type-only imports (enforced by `verbatimModuleSyntax` in `tsconfig`).
+- **Import Style:** Use `import type` for type-only imports.
 - **Styling:** Use Tailwind CSS utility classes.
-- **Persistence:** Ensure any state-changing actions call `updateState` to sync with the local JSON file.
+- **Persistence:** Metadata changes must sync with the local JSON file; binary audio must stay in IndexedDB.
+- **Performance:** Avoid high-frequency disk writes; throttle state persistence during active playback.
 - **CORS:** All RSS fetches must go through a CORS proxy to work in the browser.
