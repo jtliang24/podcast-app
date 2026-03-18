@@ -102,17 +102,25 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isPlaying, currentEpisode]);
 
-  const togglePlay = () => {
+  const saveProgress = useCallback((episodeUrl: string, currentTime: number, duration: number) => {
+    if (!fileHandle) return;
+    const progress: PlaybackProgress = { episodeUrl, currentTime, duration, lastUpdated: Date.now() };
+    updateState({ ...state, playbackProgress: { ...state.playbackProgress, [episodeUrl]: progress } });
+  }, [fileHandle, updateState, state]);
+
+  const togglePlay = useCallback(() => {
     if (audioRef.current) {
       if (isPlaying) {
         audioRef.current.pause();
-        saveProgress(currentEpisode!.audioUrl, audioRef.current.currentTime, audioRef.current.duration);
+        if (currentEpisode) {
+          saveProgress(currentEpisode.audioUrl, audioRef.current.currentTime, audioRef.current.duration);
+        }
       } else {
         audioRef.current.play().catch(console.error);
       }
       setIsPlaying(!isPlaying);
     }
-  };
+  }, [isPlaying, currentEpisode, saveProgress]);
 
   const skip = (seconds: number) => {
     if (audioRef.current) {
@@ -154,13 +162,7 @@ export default function App() {
       }
     }, 10000);
     return () => clearInterval(interval);
-  }, [currentEpisode, isPlaying]);
-
-  const saveProgress = (episodeUrl: string, currentTime: number, duration: number) => {
-    if (!fileHandle) return;
-    const progress: PlaybackProgress = { episodeUrl, currentTime, duration, lastUpdated: Date.now() };
-    updateState({ ...state, playbackProgress: { ...state.playbackProgress, [episodeUrl]: progress } });
-  };
+  }, [currentEpisode, isPlaying, saveProgress]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -276,6 +278,11 @@ export default function App() {
   };
 
   const playEpisode = useCallback(async (episode: Episode) => {
+    if (currentEpisode?.id === episode.id) {
+      togglePlay();
+      return;
+    }
+
     if (audioRef.current && currentEpisode) {
       saveProgress(currentEpisode.audioUrl, audioRef.current.currentTime, audioRef.current.duration);
     }
@@ -314,7 +321,7 @@ export default function App() {
       }
       audioRef.current.play().catch(console.error);
     }
-  }, [currentEpisode, state.playbackProgress, fileHandle, downloadedEpisodes]);
+  }, [currentEpisode, state.playbackProgress, fileHandle, downloadedEpisodes, togglePlay, saveProgress]);
 
   const handleImportOPML = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
