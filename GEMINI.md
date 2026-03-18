@@ -57,3 +57,20 @@ The project uses **Nix** for a consistent development environment.
 - **Persistence:** Metadata changes must sync with the local JSON file; binary audio must stay in IndexedDB.
 - **Performance:** Avoid high-frequency disk writes; throttle state persistence during active playback.
 - **CORS:** All RSS fetches must go through a CORS proxy to work in the browser.
+
+## Future Plans (Strategic Roadmap)
+All current and future development must align with these strategic goals. Changes should be designed to facilitate, or at least not hinder, the eventual implementation of these features.
+
+### 1. Cloud API Integration (Automated Sync)
+- **Goal:** Replace manual file-picking/importing with direct integration for **Google Drive** and **Dropbox**.
+- **Requirement:** Implement OAuth2 flows and cloud-aware persistence logic in `useFileSystem.ts`.
+- **Constraint:** Maintain the "local-first" philosophy by ensuring the user still owns the file in a visible cloud folder (e.g., `/Apps/PodPlayer/podcast_state.json`).
+
+### 2. Native Mobile Application (Capacitor)
+- **Goal:** Package the web app as a native Android/iOS app to bypass browser sandboxing.
+- **Requirement:** Integrate Capacitor for native filesystem access and background audio support.
+- **Constraint:** The codebase must remain "web-first" so that the PWA and Desktop versions continue to work identically.
+
+### 3. Native File System Access for Mobile
+- **Goal:** Use Android's Storage Access Framework (SAF) via Capacitor to allow the mobile app to "live-link" to a local JSON file, matching the Desktop experience.
+- **Requirement:** Create a bridge between the browser's `useFileSystem` and native Android storage APIs.
