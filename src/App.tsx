@@ -3,7 +3,7 @@ import { useFileSystem } from './hooks/useFileSystem';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { saveDownload, getAllDownloadedEpisodes, getAudioBlob, deleteDownload } from './services/storageService';
 import type { Podcast, Episode, PlaybackProgress } from './types';
-import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save, List, X, ChevronUp, MoreVertical } from 'lucide-react';
+import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save, List, X, ChevronUp, MoreVertical, Link as LinkIcon } from 'lucide-react';
 
 // Sub-component for individual episodes to prevent entire list re-renders
 const EpisodeItem = React.memo(({ 
@@ -102,6 +102,8 @@ export default function App() {
 
   const [viewMode, setViewMode] = useState<'search' | 'downloads'>('search');
   const [searchQuery, setSearchQuery] = useState('');
+  const [urlInput, setUrlInput] = useState('');
+  const [isAddingByUrl, setIsAddingByUrl] = useState(false);
   const [searchResults, setSearchResults] = useState<Podcast[]>([]);
   const [selectedPodcast, setSelectedPodcast] = useState<Podcast | null>(null);
   const activeFeedRef = useRef<string | null>(null);
@@ -212,6 +214,29 @@ export default function App() {
     setError(null);
     const results = await searchPodcasts(searchQuery);
     setSearchResults(results);
+  };
+
+  const handleAddByUrl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!urlInput) return;
+    setError(null);
+    setIsAddingByUrl(true);
+    try {
+      const { podcast } = await fetchPodcastFeed(urlInput);
+      if (state.subscriptions.find(s => s.feedUrl === podcast.feedUrl)) {
+        setError('Already subscribed to this podcast');
+        setIsAddingByUrl(false);
+        return;
+      }
+      updateState({ ...state, subscriptions: [...state.subscriptions, podcast] });
+      setUrlInput('');
+      selectPodcast(podcast);
+    } catch (err) {
+      console.error(err);
+      setError('Failed to fetch podcast from URL. Ensure it is a valid RSS feed.');
+    } finally {
+      setIsAddingByUrl(false);
+    }
   };
 
   const handleSubscribe = async (podcast: Podcast) => {
@@ -526,15 +551,40 @@ export default function App() {
 
       <main className="flex-1 flex flex-col pb-32 overflow-hidden">
         <header className="p-6 flex flex-col items-center bg-slate-950/50">
-          <form onSubmit={handleSearch} className="relative w-full max-w-lg group">
-            <Search className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-blue-500 transition-colors" size={18} />
-            <input 
-              value={searchQuery} 
-              onChange={e => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-3 pl-12 pr-4 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-              placeholder="Search podcasts..."
-            />
-          </form>
+          <div className="w-full max-w-lg flex flex-col space-y-4">
+            <form onSubmit={handleSearch} className="relative w-full group">
+              <Search className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-blue-500 transition-colors" size={18} />
+              <input 
+                value={searchQuery} 
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-3 pl-12 pr-4 outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                placeholder="Search podcasts..."
+              />
+            </form>
+            
+            <div className="flex items-center space-x-2">
+              <div className="h-[1px] flex-1 bg-slate-800"></div>
+              <span className="text-[10px] font-bold text-slate-600 uppercase tracking-widest">or</span>
+              <div className="h-[1px] flex-1 bg-slate-800"></div>
+            </div>
+
+            <form onSubmit={handleAddByUrl} className="relative w-full group">
+              <LinkIcon className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-emerald-500 transition-colors" size={18} />
+              <input 
+                value={urlInput} 
+                onChange={e => setUrlInput(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-3 pl-12 pr-24 outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+                placeholder="Paste RSS feed URL..."
+              />
+              <button 
+                type="submit"
+                disabled={isAddingByUrl || !urlInput}
+                className="absolute right-2 top-2 bottom-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-800 disabled:text-slate-500 px-4 rounded-xl text-xs font-bold transition-all flex items-center"
+              >
+                {isAddingByUrl ? <Loader2 size={14} className="animate-spin" /> : 'Add'}
+              </button>
+            </form>
+          </div>
           {error && (
             <div className="mt-4 flex items-center text-red-400 bg-red-400/10 px-4 py-2 rounded-xl text-xs border border-red-400/20">
               <AlertCircle size={14} className="mr-2" /> {error}
