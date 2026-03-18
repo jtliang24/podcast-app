@@ -581,16 +581,16 @@ export default function App() {
               />
             </div>
           </div>
-          <audio 
-            ref={audioRef} 
-            onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
-            onPlay={() => setIsPlaying(true)} 
-            onPause={() => setIsPlaying(false)} 
-            onEnded={() => setIsPlaying(false)}
-            className="hidden" 
-          />
         </footer>
       )}
+      <audio 
+        ref={audioRef} 
+        onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
+        onPlay={() => setIsPlaying(true)} 
+        onPause={() => setIsPlaying(false)} 
+        onEnded={() => setIsPlaying(false)}
+        className="hidden" 
+      />
     </div>
   );
 }
