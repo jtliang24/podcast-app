@@ -3,7 +3,7 @@ import { useFileSystem } from './hooks/useFileSystem';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { saveDownload, getAllDownloadedEpisodes, getAudioBlob, deleteDownload } from './services/storageService';
 import type { Podcast, Episode, PlaybackProgress } from './types';
-import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save, List, X, ChevronUp, MoreVertical, Link as LinkIcon, Podcast as PodcastIcon } from 'lucide-react';
+import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save, List, X, ChevronUp, MoreVertical, Link as LinkIcon, Podcast as PodcastIcon, Clock } from 'lucide-react';
 
 // Sub-component for individual episodes to prevent entire list re-renders
 const EpisodeItem = React.memo(({
@@ -30,7 +30,7 @@ const EpisodeItem = React.memo(({
   const dateStr = useMemo(() => {
     try {
       return new Date(episode.pubDate).toLocaleDateString();
-    } catch (e) {
+    } catch {
       return 'Unknown date';
     }
   }, [episode.pubDate]);
@@ -121,7 +121,7 @@ export default function App() {
     importState
   } = useFileSystem();
 
-  const [viewMode, setViewMode] = useState<'search' | 'downloads'>('search');
+  const [viewMode, setViewMode] = useState<'search' | 'downloads' | 'new-releases'>('search');
   const [searchQuery, setSearchQuery] = useState('');
   const [urlInput, setUrlInput] = useState('');
   const [isAddingByUrl, setIsAddingByUrl] = useState(false);
@@ -130,6 +130,8 @@ export default function App() {
   const activeFeedRef = useRef<string | null>(null);
   const [allEpisodes, setAllEpisodes] = useState<Episode[]>([]);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [newReleases, setNewReleases] = useState<Episode[]>([]);
+  const [isLoadingNewReleases, setIsLoadingNewReleases] = useState(false);
   
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [downloadedEpisodes, setDownloadedEpisodes] = useState<Episode[]>([]);
@@ -287,6 +289,44 @@ export default function App() {
     }));
     if (selectedPodcast?.feedUrl === feedUrl) setSelectedPodcast(null);
   };
+
+  const loadNewReleases = useCallback(async () => {
+    if (state.subscriptions.length === 0) return;
+    setIsLoadingNewReleases(true);
+    try {
+      const results = await Promise.allSettled(
+        state.subscriptions.map(sub => fetchPodcastFeed(sub.feedUrl))
+      );
+      
+      const allNewEpisodes: Episode[] = [];
+      results.forEach(result => {
+        if (result.status === 'fulfilled') {
+          allNewEpisodes.push(...result.value.episodes.slice(0, 10));
+        }
+      });
+      
+      allNewEpisodes.sort((a, b) => {
+        const dateA = new Date(a.pubDate).getTime();
+        const dateB = new Date(b.pubDate).getTime();
+        if (isNaN(dateA) && isNaN(dateB)) return 0;
+        if (isNaN(dateA)) return 1;
+        if (isNaN(dateB)) return -1;
+        return dateB - dateA;
+      });
+      
+      setNewReleases(allNewEpisodes.slice(0, 100));
+    } catch (err) {
+      console.error('Error loading new releases:', err);
+    } finally {
+      setIsLoadingNewReleases(false);
+    }
+  }, [state.subscriptions]);
+
+  useEffect(() => {
+    if (viewMode === 'new-releases' && newReleases.length === 0 && state.subscriptions.length > 0) {
+      loadNewReleases();
+    }
+  }, [viewMode, newReleases.length, state.subscriptions.length, loadNewReleases]);
 
   const loadMoreEpisodes = useCallback(() => {
     if (episodes.length < allEpisodes.length) {
@@ -574,14 +614,20 @@ export default function App() {
         </div>
         
         <div className="p-4 border-b border-slate-800 flex flex-col space-y-2">
-           <button 
+           <button
              onClick={() => setViewMode('downloads')}
              className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-colors ${viewMode === 'downloads' ? 'bg-blue-600' : 'hover:bg-slate-800 text-slate-300'}`}
            >
              <HardDrive size={18} />
              <span className="font-bold text-sm">Downloads</span>
            </button>
-        </div>
+           <button
+             onClick={() => setViewMode('new-releases')}
+             className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-colors ${viewMode === 'new-releases' ? 'bg-blue-600' : 'hover:bg-slate-800 text-slate-300'}`}
+           >
+             <Clock size={18} />
+             <span className="font-bold text-sm">New Releases</span>
+           </button>        </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar">
           {state.subscriptions.map(p => (
@@ -686,6 +732,55 @@ export default function App() {
                         isPlaying={isPlaying} 
                         onPlay={playEpisode}
                         downloadStatus="downloaded"
+                        onDownload={handleDownload}
+                        onDeleteDownload={handleDeleteDownload}
+                        onAddToQueue={addToQueue}
+                        artworkUrl={podcast?.artworkUrl}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : viewMode === 'new-releases' ? (
+            <div className="animate-in fade-in duration-500">
+              <div className="flex justify-between items-center mb-8">
+                <h1 className="text-3xl font-black">New Releases</h1>
+                <button 
+                  onClick={loadNewReleases}
+                  className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-white"
+                  title="Refresh New Releases"
+                >
+                  <RotateCw size={20} className={isLoadingNewReleases ? "animate-spin" : ""} />
+                </button>
+              </div>
+              
+              {isLoadingNewReleases && newReleases.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-blue-500 space-y-4">
+                  <Loader2 size={32} className="animate-spin" />
+                  <span className="font-bold">Fetching latest episodes...</span>
+                </div>
+              ) : newReleases.length === 0 ? (
+                <div className="flex flex-col items-center justify-center text-slate-500 mt-20">
+                   <Clock size={64} className="mb-4 opacity-10" />
+                   <p className="text-lg font-bold opacity-20">No new releases found.</p>
+                   <p className="text-sm opacity-20 mt-2">Subscribe to some podcasts to see new episodes here.</p>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {newReleases.map(e => {
+                    const podcast = state.subscriptions.find(s => s.feedUrl === e.podcastId);
+                    const isDownloaded = downloadedEpisodes.some(d => d.id === e.id);
+                    const isDownloading = downloadingIds.has(e.id);
+                    const status = isDownloaded ? 'downloaded' : (isDownloading ? 'downloading' : 'none');
+                    return (
+                      <EpisodeItem
+                        key={`${e.podcastId}-${e.id}`}
+                        episode={e} 
+                        isCurrent={currentEpisode?.id === e.id} 
+                        isPlaying={isPlaying} 
+                        onPlay={playEpisode}
+                        downloadStatus={status}
                         onDownload={handleDownload}
                         onDeleteDownload={handleDeleteDownload}
                         onAddToQueue={addToQueue}
