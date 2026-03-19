@@ -40,7 +40,7 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
 
       const items = Array.isArray(channel.item) ? channel.item : [channel.item].filter(Boolean);
 
-      const episodes: Episode[] = items.map((item: { guid?: { '#text'?: string } | string, link?: string, enclosure?: { '@_url'?: string }, title?: string, pubDate?: string, description?: string, 'content:encoded'?: string, 'itunes:duration'?: string | number }) => ({
+      const episodes: Episode[] = items.map((item: { guid?: { '#text'?: string } | string, link?: string, enclosure?: { '@_url'?: string }, title?: string, pubDate?: string, description?: string, 'content:encoded'?: string, 'itunes:duration'?: string | number, 'itunes:keywords'?: string }) => ({
         id: String(item.guid instanceof Object ? item.guid['#text'] : item.guid || item.link || item.enclosure?.['@_url'] || Math.random()),
         podcastId: feedUrl,
         title: String(item.title || 'Untitled Episode'),
@@ -48,6 +48,7 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
         audioUrl: String(item.enclosure?.['@_url'] || ''),
         duration: parseDuration(item['itunes:duration'] || '0'),
         description: String(item.description || item['content:encoded'] || ''),
+        keywords: item['itunes:keywords'] ? item['itunes:keywords'].split(',').map(k => k.trim()) : [],
       }));
 
       return { podcast, episodes };

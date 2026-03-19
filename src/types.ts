@@ -15,6 +15,7 @@ export interface Episode {
   audioUrl: string;
   duration: number;
   description: string;
+  keywords?: string[];
 }
 
 export interface PlaybackProgress {
