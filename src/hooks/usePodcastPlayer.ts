@@ -46,12 +46,12 @@ export function usePodcastPlayer({
     }
   }, [isPlaying, currentEpisode, saveProgress]);
 
-  const skip = (seconds: number) => {
+  const skip = useCallback((seconds: number) => {
     if (audioRef.current) {
       audioRef.current.currentTime += seconds;
       setCurrentTime(audioRef.current.currentTime);
     }
-  };
+  }, []);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const time = parseFloat(e.target.value);
@@ -87,6 +87,58 @@ export function usePodcastPlayer({
     }, 10000);
     return () => clearInterval(interval);
   }, [currentEpisode, isPlaying, saveProgress]);
+
+  // Media Session API: Metadata
+  useEffect(() => {
+    if ('mediaSession' in navigator && currentEpisode) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentEpisode.title,
+        artist: playingPodcast?.title || 'Unknown Podcast',
+        album: playingPodcast?.title || 'Unknown Podcast',
+        artwork: playingPodcast?.artworkUrl ? [
+          { src: playingPodcast.artworkUrl, sizes: '512x512', type: 'image/jpeg' },
+          { src: playingPodcast.artworkUrl, sizes: '256x256', type: 'image/jpeg' },
+          { src: playingPodcast.artworkUrl, sizes: '128x128', type: 'image/jpeg' }
+        ] : []
+      });
+    }
+  }, [currentEpisode, playingPodcast]);
+
+  // Media Session API: Action Handlers & Playback State
+  useEffect(() => {
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+
+      navigator.mediaSession.setActionHandler('play', () => {
+        togglePlay();
+      });
+      navigator.mediaSession.setActionHandler('pause', () => {
+        togglePlay();
+      });
+      navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+        skip(-(details.seekOffset || 15));
+      });
+      navigator.mediaSession.setActionHandler('seekforward', (details) => {
+        skip(details.seekOffset || 30);
+      });
+      navigator.mediaSession.setActionHandler('seekto', (details) => {
+        if (audioRef.current && details.seekTime !== undefined && details.seekTime !== null) {
+          audioRef.current.currentTime = details.seekTime;
+          setCurrentTime(details.seekTime);
+        }
+      });
+    }
+
+    return () => {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.setActionHandler('play', null);
+        navigator.mediaSession.setActionHandler('pause', null);
+        navigator.mediaSession.setActionHandler('seekbackward', null);
+        navigator.mediaSession.setActionHandler('seekforward', null);
+        navigator.mediaSession.setActionHandler('seekto', null);
+      }
+    };
+  }, [isPlaying, togglePlay, skip]);
 
   const playEpisode = useCallback(async (episode: Episode) => {
     if (currentEpisode?.id === episode.id) {
