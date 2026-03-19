@@ -24,12 +24,15 @@ export interface PlaybackProgress {
   lastUpdated: number;
 }
 
+export type SortOrder = 'newest' | 'oldest' | 'a-z' | 'z-a' | 'longest' | 'shortest';
+
 export interface AppState {
   subscriptions: Podcast[];
   playbackProgress: Record<string, PlaybackProgress>;
   queue: Episode[];
   newReleases: Episode[];
   lastRefresh?: number;
+  podcastSortOrders: Record<string, SortOrder>;
 }
 
 export const INITIAL_STATE: AppState = {
@@ -37,4 +40,5 @@ export const INITIAL_STATE: AppState = {
   playbackProgress: {},
   queue: [],
   newReleases: [],
+  podcastSortOrders: {},
 };

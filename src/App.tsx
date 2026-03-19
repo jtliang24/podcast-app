@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useFileSystem } from './hooks/useFileSystem';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { saveDownload, getAllDownloadedEpisodes, getAudioBlob, deleteDownload } from './services/storageService';
-import type { Podcast, Episode, PlaybackProgress } from './types';
+import type { Podcast, Episode, PlaybackProgress, SortOrder } from './types';
 import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save, List, X, ChevronUp, MoreVertical, Link as LinkIcon, Podcast as PodcastIcon, Clock } from 'lucide-react';
 
 // Sub-component for individual episodes to prevent entire list re-renders
@@ -363,6 +363,27 @@ export default function App() {
     }
   }, [episodes.length, allEpisodes]);
 
+  const sortEpisodes = useCallback((episodesToSort: Episode[], order: SortOrder) => {
+    return [...episodesToSort].sort((a, b) => {
+      switch (order) {
+        case 'newest':
+          return new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime();
+        case 'oldest':
+          return new Date(a.pubDate).getTime() - new Date(b.pubDate).getTime();
+        case 'a-z':
+          return a.title.localeCompare(b.title);
+        case 'z-a':
+          return b.title.localeCompare(a.title);
+        case 'longest':
+          return b.duration - a.duration;
+        case 'shortest':
+          return a.duration - b.duration;
+        default:
+          return 0;
+      }
+    });
+  }, []);
+
   const selectPodcast = async (podcast: Podcast) => {
     setViewMode('search');
     setSelectedPodcast(podcast);
@@ -371,18 +392,21 @@ export default function App() {
     setAllEpisodes([]);
     setError(null);
     setIsLoadingEpisodes(true);
-    
+
     try {
       const { episodes: fetchedEpisodes } = await fetchPodcastFeed(podcast.feedUrl);
       if (activeFeedRef.current !== podcast.feedUrl) return;
 
-      setAllEpisodes(fetchedEpisodes);
+      const order = state.podcastSortOrders[podcast.feedUrl] || 'newest';
+      const sortedEpisodes = sortEpisodes(fetchedEpisodes, order);
+
+      setAllEpisodes(sortedEpisodes);
       setIsLoadingEpisodes(false);
 
-      if (fetchedEpisodes.length <= 100) {
-        setEpisodes(fetchedEpisodes);
+      if (sortedEpisodes.length <= 100) {
+        setEpisodes(sortedEpisodes);
       } else {
-        const initialChunk = fetchedEpisodes.slice(0, 20);
+        const initialChunk = sortedEpisodes.slice(0, 20);
         setEpisodes(initialChunk);
 
         let currentIndex = 20;
@@ -391,30 +415,45 @@ export default function App() {
 
         const loadNextAutoChunk = () => {
           if (activeFeedRef.current !== podcast.feedUrl) return;
-          if (currentIndex >= autoLimit || currentIndex >= fetchedEpisodes.length) return;
+          if (currentIndex >= autoLimit || currentIndex >= sortedEpisodes.length) return;
 
-          const nextIndex = Math.min(currentIndex + chunkSize, autoLimit, fetchedEpisodes.length);
-          const nextChunk = fetchedEpisodes.slice(currentIndex, nextIndex);
-          
+          const nextIndex = Math.min(currentIndex + chunkSize, autoLimit, sortedEpisodes.length);
+          const nextChunk = sortedEpisodes.slice(currentIndex, nextIndex);
+
           setEpisodes(prev => [...prev, ...nextChunk]);
           currentIndex = nextIndex;
 
-          if (currentIndex < autoLimit && currentIndex < fetchedEpisodes.length) {
+          if (currentIndex < autoLimit && currentIndex < sortedEpisodes.length) {
             setTimeout(loadNextAutoChunk, 150);
           }
         };
 
         setTimeout(loadNextAutoChunk, 100);
       }
-    } catch (e) { 
+    } catch (e) {
       if (activeFeedRef.current === podcast.feedUrl) {
-        console.error(e); 
+        console.error(e);
         setError('Failed to load feed. It may be too large or the proxy may be busy.');
         setIsLoadingEpisodes(false);
       }
     }
   };
 
+  const handleSortChange = useCallback((order: SortOrder) => {
+    if (!selectedPodcast) return;
+
+    updateState(prev => ({
+      ...prev,
+      podcastSortOrders: {
+        ...prev.podcastSortOrders,
+        [selectedPodcast.feedUrl]: order
+      }
+    }));
+
+    const sorted = sortEpisodes(allEpisodes, order);
+    setAllEpisodes(sorted);
+    setEpisodes(sorted.slice(0, Math.max(20, episodes.length))); // Maintain rough scroll position chunk size
+  }, [selectedPodcast, allEpisodes, episodes.length, updateState, sortEpisodes]);
   const handleDownload = async (episode: Episode) => {
     setDownloadingIds(prev => new Set(prev).add(episode.id));
     try {
@@ -848,11 +887,28 @@ export default function App() {
             </div>
           ) : selectedPodcast ? (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="flex items-end space-x-8 mb-12">
-                <img src={selectedPodcast.artworkUrl} className="w-48 h-48 rounded-2xl shadow-2xl bg-slate-800" alt="" />
+              <div className="flex items-end justify-between space-x-8 mb-12">
+                <div className="flex items-end space-x-8">
+                  <img src={selectedPodcast.artworkUrl} className="w-48 h-48 rounded-2xl shadow-2xl bg-slate-800" alt="" />
+                  <div className="pb-2">
+                    <h1 className="text-4xl font-black mb-2 tracking-tight">{selectedPodcast.title}</h1>
+                    <p className="text-slate-400 font-bold">{selectedPodcast.author}</p>
+                  </div>
+                </div>
+                
                 <div className="pb-2">
-                  <h1 className="text-4xl font-black mb-2 tracking-tight">{selectedPodcast.title}</h1>
-                  <p className="text-slate-400 font-bold">{selectedPodcast.author}</p>
+                  <select 
+                    value={state.podcastSortOrders[selectedPodcast.feedUrl] || 'newest'} 
+                    onChange={(e) => handleSortChange(e.target.value as SortOrder)}
+                    className="bg-slate-900 border border-slate-800 text-slate-300 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 outline-none cursor-pointer hover:bg-slate-800 transition-colors"
+                  >
+                    <option value="newest">Newest to Oldest</option>
+                    <option value="oldest">Oldest to Newest</option>
+                    <option value="a-z">A to Z</option>
+                    <option value="z-a">Z to A</option>
+                    <option value="longest">Longest First</option>
+                    <option value="shortest">Shortest First</option>
+                  </select>
                 </div>
               </div>
               
