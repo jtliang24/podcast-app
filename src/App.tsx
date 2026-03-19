@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useGoogleLogin } from '@react-oauth/google';
+import { searchStateFile, downloadStateFile, createStateFile } from './services/driveService';
 import { useFileSystem } from './hooks/useFileSystem';
 import { usePodcastPlayer } from './hooks/usePodcastPlayer';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { saveDownload, getAllDownloadedEpisodes, deleteDownload } from './services/storageService';
-import type { Podcast, Episode, SortOrder } from './types';
-import { Loader2, FolderOpen, Plus } from 'lucide-react';
+import type { Podcast, Episode, SortOrder, AppState } from './types';
+import { Loader2, FolderOpen, Plus, Cloud } from 'lucide-react';
+import { INITIAL_STATE } from './types';
 
 // Components
 import Sidebar from './components/Sidebar';
@@ -27,8 +30,94 @@ export default function App() {
     createNewFile, 
     updateState,
     exportState,
-    importState
+    importState,
+    setStorageMode,
+    driveAccessToken,
+    setDriveAccessToken,
+    setDriveFileId,
+    setState,
+    setIsLoading
   } = useFileSystem();
+
+  const [isDriveSetup, setIsDriveSetup] = useState(false);
+  const [driveLoadingMessage, setDriveLoadingMessage] = useState<string | null>(null);
+
+  const loginWithGoogle = useGoogleLogin({
+    scope: 'https://www.googleapis.com/auth/drive.appdata',
+    onSuccess: async (tokenResponse) => {
+      setIsLoading(true);
+      setDriveLoadingMessage('Searching for state file...');
+      try {
+        const fileId = await searchStateFile(tokenResponse.access_token);
+        if (fileId) {
+          setDriveLoadingMessage('Downloading state file...');
+          const content = await downloadStateFile(tokenResponse.access_token, fileId);
+          const parsed = JSON.parse(content) as AppState;
+          setState({ ...INITIAL_STATE, ...parsed });
+          setDriveFileId(fileId);
+          setDriveAccessToken(tokenResponse.access_token);
+          setStorageMode('google-drive');
+        } else {
+          // File not found, enter setup phase
+          setDriveAccessToken(tokenResponse.access_token);
+          setIsDriveSetup(true);
+        }
+      } catch (err) {
+        console.error('Drive Error:', err);
+        alert('Failed to connect to Google Drive.');
+      } finally {
+        setIsLoading(false);
+        setDriveLoadingMessage(null);
+      }
+    },
+    onError: () => {
+      console.error('Google Login Failed');
+    },
+  });
+
+  const handleCreateDriveProfile = async () => {
+    if (!driveAccessToken) return;
+    setIsLoading(true);
+    setDriveLoadingMessage('Creating new profile in Drive...');
+    try {
+      const fileId = await createStateFile(driveAccessToken, JSON.stringify(INITIAL_STATE, null, 2));
+      setState(INITIAL_STATE);
+      setDriveFileId(fileId);
+      setStorageMode('google-drive');
+      setIsDriveSetup(false);
+    } catch (err) {
+      console.error('Error creating profile:', err);
+      alert('Failed to create profile.');
+    } finally {
+      setIsLoading(false);
+      setDriveLoadingMessage(null);
+    }
+  };
+
+  const handleUploadLocalStateToDrive = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && driveAccessToken) {
+      setIsLoading(true);
+      setDriveLoadingMessage('Uploading state file to Drive...');
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text) as AppState;
+        const newState = { ...INITIAL_STATE, ...parsed };
+        const fileId = await createStateFile(driveAccessToken, JSON.stringify(newState, null, 2));
+        setState(newState);
+        setDriveFileId(fileId);
+        setStorageMode('google-drive');
+        setIsDriveSetup(false);
+      } catch (err) {
+        console.error('Error uploading to drive:', err);
+        alert('Failed to upload file.');
+      } finally {
+        setIsLoading(false);
+        setDriveLoadingMessage(null);
+      }
+      e.target.value = '';
+    }
+  };
 
   const [viewMode, setViewMode] = useState<'search' | 'downloads' | 'new-releases'>('search');
   const [searchQuery, setSearchQuery] = useState('');
@@ -493,23 +582,51 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
         <Loader2 className="animate-spin text-blue-500 mb-4" size={48} />
-        <h1 className="text-xl font-bold">Loading your library...</h1>
+        <h1 className="text-xl font-bold">{driveLoadingMessage || 'Loading your library...'}</h1>
       </div>
     );
   }
 
-  if (isFileSystemAccessSupported && !fileHandle) {
+  if (isDriveSetup) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white text-center">
+        <h1 className="text-4xl font-black mb-6 bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
+          Google Drive Setup
+        </h1>
+        <p className="text-slate-300 mb-8 max-w-md">No existing state file found in your Google Drive. Would you like to start fresh or upload a local file?</p>
+        <div className="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl flex flex-col space-y-6 max-w-sm w-full mx-auto">
+          <button onClick={handleCreateDriveProfile} className="bg-emerald-600 hover:bg-emerald-700 p-4 rounded-2xl flex items-center justify-center font-bold text-lg transition-transform hover:scale-105 active:scale-95">
+            <Plus className="mr-3" /> Start New Profile
+          </button>
+          <label className="bg-blue-600 hover:bg-blue-700 p-4 rounded-2xl flex items-center justify-center font-bold text-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer">
+            <FolderOpen className="mr-3" /> Upload Local State
+            <input type="file" accept=".json" className="hidden" onChange={handleUploadLocalStateToDrive} />
+          </label>
+        </div>
+      </div>
+    );
+  }
+
+  if (isFileSystemAccessSupported && !fileHandle && storageMode !== 'google-drive') {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white text-center">
         <h1 className="text-5xl font-black mb-12 bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
           Podcast Player
         </h1>
         <div className="bg-slate-800 p-10 rounded-3xl border border-slate-700 shadow-2xl flex flex-col space-y-6 max-w-sm w-full mx-auto">
+          <button onClick={() => loginWithGoogle()} className="bg-white text-slate-900 hover:bg-slate-100 p-5 rounded-2xl flex items-center justify-center font-bold text-lg transition-transform hover:scale-105 active:scale-95">
+            <Cloud className="mr-3 text-blue-600" /> Sign in with Google
+          </button>
+          <div className="relative flex py-2 items-center">
+            <div className="flex-grow border-t border-slate-600"></div>
+            <span className="flex-shrink-0 mx-4 text-slate-500 text-sm font-semibold">OR</span>
+            <div className="flex-grow border-t border-slate-600"></div>
+          </div>
           <button onClick={selectFile} className="bg-blue-600 hover:bg-blue-700 p-5 rounded-2xl flex items-center justify-center font-bold text-lg transition-transform hover:scale-105 active:scale-95">
-            <FolderOpen className="mr-3" /> Open State File
+            <FolderOpen className="mr-3" /> Open Local State
           </button>
           <button onClick={createNewFile} className="bg-slate-700 hover:bg-slate-600 p-5 rounded-2xl flex items-center justify-center font-bold text-lg transition-transform hover:scale-105 active:scale-95">
-            <Plus className="mr-3" /> Create New File
+            <Plus className="mr-3" /> Create New Local File
           </button>
         </div>
       </div>

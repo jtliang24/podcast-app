@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import type { AppState } from '../types';
 import { INITIAL_STATE } from '../types';
 
-type StorageMode = 'file-system-access' | 'opfs';
+type StorageMode = 'file-system-access' | 'opfs' | 'google-drive';
 
 const DB_NAME = 'PodcastFileDB';
 const STORE_NAME = 'handles';
@@ -47,6 +47,8 @@ export function useFileSystem() {
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const [isLoading, setIsLoading] = useState(false);
   const [storageMode, setStorageMode] = useState<StorageMode | null>(null);
+  const [driveAccessToken, setDriveAccessToken] = useState<string | null>(null);
+  const [driveFileId, setDriveFileId] = useState<string | null>(null);
 
   // Keep state in a ref to always have the latest version for functional updates and I/O
   const stateRef = useRef<AppState>(state);
@@ -208,8 +210,15 @@ export function useFileSystem() {
       await saveState(fileHandle, newState);
     } else if (storageMode === 'opfs') {
       await saveToOPFS(newState);
+    } else if (storageMode === 'google-drive' && driveAccessToken && driveFileId) {
+      try {
+        const { updateStateFile } = await import('../services/driveService');
+        await updateStateFile(driveAccessToken, driveFileId, JSON.stringify(newState, null, 2));
+      } catch (err) {
+        console.error('Error saving to Google Drive:', err);
+      }
     }
-  }, [fileHandle, storageMode]);
+  }, [fileHandle, storageMode, driveAccessToken, driveFileId]);
 
   const exportState = useCallback(async () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -241,6 +250,13 @@ export function useFileSystem() {
     createNewFile,
     updateState,
     exportState,
-    importState
+    importState,
+    setStorageMode,
+    driveAccessToken,
+    setDriveAccessToken,
+    driveFileId,
+    setDriveFileId,
+    setState,
+    setIsLoading
   };
 }
