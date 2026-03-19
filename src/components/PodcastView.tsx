@@ -12,6 +12,7 @@ interface PodcastViewProps {
   currentEpisode: Episode | null;
   isPlaying: boolean;
   playEpisode: (episode: Episode) => void;
+  onShowDescription?: (episode: Episode) => void;
   downloadedEpisodes: Episode[];
   downloadingIds: Set<string>;
   handleDownload: (episode: Episode) => void;
@@ -33,6 +34,7 @@ const PodcastView: React.FC<PodcastViewProps> = ({
   currentEpisode,
   isPlaying,
   playEpisode,
+  onShowDescription,
   downloadedEpisodes,
   downloadingIds,
   handleDownload,
@@ -110,6 +112,7 @@ const PodcastView: React.FC<PodcastViewProps> = ({
                 isCurrent={currentEpisode?.id === e.id}
                 isPlaying={isPlaying}
                 onPlay={playEpisode}
+                onShowDescription={onShowDescription}
                 downloadStatus={status}
                 onDownload={handleDownload}
                 onDeleteDownload={handleDeleteDownload}

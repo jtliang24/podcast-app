@@ -14,6 +14,7 @@ import NewReleasesView from './components/NewReleasesView';
 import DownloadsView from './components/DownloadsView';
 import PodcastView from './components/PodcastView';
 import SearchResultsView from './components/SearchResultsView';
+import EpisodeDescriptionView from './components/EpisodeDescriptionView';
 
 export default function App() {
   const { 
@@ -35,7 +36,13 @@ export default function App() {
   const [isAddingByUrl, setIsAddingByUrl] = useState(false);
   const [searchResults, setSearchResults] = useState<Podcast[]>([]);
   const [selectedPodcast, setSelectedPodcast] = useState<Podcast | null>(null);
+  const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
   const activeFeedRef = useRef<string | null>(null);
+
+  const switchView = useCallback((mode: 'search' | 'downloads' | 'new-releases') => {
+    setViewMode(mode);
+    setSelectedEpisode(null);
+  }, []);
   const [allEpisodes, setAllEpisodes] = useState<Episode[]>([]);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [isRefreshingNewReleases, setIsRefreshingNewReleases] = useState(false);
@@ -146,6 +153,7 @@ export default function App() {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     setViewMode('search');
+    setSelectedEpisode(null);
     if (!searchQuery) return;
     setError(null);
     const results = await searchPodcasts(searchQuery);
@@ -191,6 +199,7 @@ export default function App() {
     });
     setSearchResults([]);
     setSearchQuery('');
+    setSelectedEpisode(null);
   };
 
   const handleUnsubscribe = async (feedUrl: string) => {
@@ -199,6 +208,7 @@ export default function App() {
       subscriptions: prev.subscriptions.filter(s => s.feedUrl !== feedUrl) 
     }));
     if (selectedPodcast?.feedUrl === feedUrl) setSelectedPodcast(null);
+    if (selectedEpisode?.podcastId === feedUrl) setSelectedEpisode(null);
   };
 
   // Sorting and Loading
@@ -226,6 +236,7 @@ export default function App() {
   const selectPodcast = async (podcast: Podcast) => {
     setViewMode('search');
     setSelectedPodcast(podcast);
+    setSelectedEpisode(null);
     activeFeedRef.current = podcast.feedUrl;
     setEpisodes([]);
     setAllEpisodes([]);
@@ -510,7 +521,7 @@ export default function App() {
       <Sidebar 
         state={state}
         viewMode={viewMode}
-        setViewMode={setViewMode}
+        setViewMode={switchView}
         selectedPodcast={selectedPodcast}
         selectPodcast={selectPodcast}
         handleUnsubscribe={handleUnsubscribe}
@@ -534,13 +545,31 @@ export default function App() {
         />
 
         <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-          {viewMode === 'downloads' ? (
+          {selectedEpisode ? (
+            <EpisodeDescriptionView 
+              episode={selectedEpisode}
+              podcast={state.subscriptions.find(s => s.feedUrl === selectedEpisode.podcastId) || selectedPodcast || undefined}
+              onBack={() => setSelectedEpisode(null)}
+              onPlay={playEpisode}
+              isCurrent={currentEpisode?.id === selectedEpisode.id}
+              isPlaying={isPlaying}
+              onAddToQueue={addToQueue}
+              onDownload={handleDownload}
+              onDeleteDownload={handleDeleteDownload}
+              downloadStatus={
+                downloadedEpisodes.some(d => d.id === selectedEpisode.id) 
+                  ? 'downloaded' 
+                  : (downloadingIds.has(selectedEpisode.id) ? 'downloading' : 'none')
+              }
+            />
+          ) : viewMode === 'downloads' ? (
             <DownloadsView 
               state={state}
               downloadedEpisodes={downloadedEpisodes}
               currentEpisode={currentEpisode}
               isPlaying={isPlaying}
               playEpisode={playEpisode}
+              onShowDescription={setSelectedEpisode}
               handleDownload={handleDownload}
               handleDeleteDownload={handleDeleteDownload}
               addToQueue={addToQueue}
@@ -555,6 +584,7 @@ export default function App() {
               currentEpisode={currentEpisode}
               isPlaying={isPlaying}
               playEpisode={playEpisode}
+              onShowDescription={setSelectedEpisode}
               downloadedEpisodes={downloadedEpisodes}
               downloadingIds={downloadingIds}
               handleDownload={handleDownload}
@@ -577,6 +607,7 @@ export default function App() {
               currentEpisode={currentEpisode}
               isPlaying={isPlaying}
               playEpisode={playEpisode}
+              onShowDescription={setSelectedEpisode}
               downloadedEpisodes={downloadedEpisodes}
               downloadingIds={downloadingIds}
               handleDownload={handleDownload}

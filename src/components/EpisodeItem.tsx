@@ -11,6 +11,7 @@ interface EpisodeItemProps {
   isCurrent: boolean;
   isPlaying: boolean;
   onPlay: (e: Episode) => void;
+  onShowDescription?: (e: Episode) => void;
   downloadStatus: 'none' | 'downloading' | 'downloaded';
   onDownload: (e: Episode) => void;
   onDeleteDownload: (id: string) => void;
@@ -26,6 +27,7 @@ const EpisodeItem = React.memo(({
   isCurrent,
   isPlaying,
   onPlay,
+  onShowDescription,
   downloadStatus,
   onDownload,
   onDeleteDownload,
@@ -59,9 +61,9 @@ const EpisodeItem = React.memo(({
             <PodcastIcon size={20} />
           </div>
         )}
-        <button onClick={() => onPlay(episode)} className="flex-1 text-left min-w-0 cursor-pointer flex items-center">
+        <button onClick={() => onShowDescription ? onShowDescription(episode) : onPlay(episode)} className="flex-1 text-left min-w-0 cursor-pointer flex items-center">
           <div className="min-w-0 flex-1">
-            <div className={`font-bold text-sm truncate ${isCurrent ? 'text-blue-400' : 'text-slate-200'}`}>{episode.title}</div>
+            <div className={`font-bold text-sm truncate group-hover:underline ${isCurrent ? 'text-blue-400' : 'text-slate-200'}`}>{episode.title}</div>
             <div className="text-[10px] text-slate-500 mt-1">{dateStr}</div>
           </div>
           {isPlayed && <Check size={16} className="ml-2 text-slate-500 flex-shrink-0" />}

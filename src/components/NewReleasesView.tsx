@@ -11,6 +11,7 @@ interface NewReleasesViewProps {
   currentEpisode: Episode | null;
   isPlaying: boolean;
   playEpisode: (episode: Episode) => void;
+  onShowDescription?: (episode: Episode) => void;
   downloadedEpisodes: Episode[];
   downloadingIds: Set<string>;
   handleDownload: (episode: Episode) => void;
@@ -27,6 +28,7 @@ const NewReleasesView: React.FC<NewReleasesViewProps> = ({
   currentEpisode,
   isPlaying,
   playEpisode,
+  onShowDescription,
   downloadedEpisodes,
   downloadingIds,
   handleDownload,
@@ -106,6 +108,7 @@ const NewReleasesView: React.FC<NewReleasesViewProps> = ({
                 isCurrent={currentEpisode?.id === e.id} 
                 isPlaying={isPlaying} 
                 onPlay={playEpisode}
+                onShowDescription={onShowDescription}
                 downloadStatus={status}
                 onDownload={handleDownload}
                 onDeleteDownload={handleDeleteDownload}

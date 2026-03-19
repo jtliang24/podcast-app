@@ -9,6 +9,7 @@ interface DownloadsViewProps {
   currentEpisode: Episode | null;
   isPlaying: boolean;
   playEpisode: (episode: Episode) => void;
+  onShowDescription?: (episode: Episode) => void;
   handleDownload: (episode: Episode) => void;
   handleDeleteDownload: (id: string) => void;
   addToQueue: (episode: Episode, position: 'top' | 'bottom') => void;
@@ -21,6 +22,7 @@ const DownloadsView: React.FC<DownloadsViewProps> = ({
   currentEpisode,
   isPlaying,
   playEpisode,
+  onShowDescription,
   handleDownload,
   handleDeleteDownload,
   addToQueue,
@@ -45,6 +47,7 @@ const DownloadsView: React.FC<DownloadsViewProps> = ({
                 isCurrent={currentEpisode?.id === e.id} 
                 isPlaying={isPlaying} 
                 onPlay={playEpisode}
+                onShowDescription={onShowDescription}
                 downloadStatus="downloaded"
                 onDownload={handleDownload}
                 onDeleteDownload={handleDeleteDownload}
