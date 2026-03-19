@@ -130,8 +130,7 @@ export default function App() {
   const activeFeedRef = useRef<string | null>(null);
   const [allEpisodes, setAllEpisodes] = useState<Episode[]>([]);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
-  const [newReleases, setNewReleases] = useState<Episode[]>([]);
-  const [isLoadingNewReleases, setIsLoadingNewReleases] = useState(false);
+  const [isRefreshingNewReleases, setIsRefreshingNewReleases] = useState(false);
   
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [downloadedEpisodes, setDownloadedEpisodes] = useState<Episode[]>([]);
@@ -292,41 +291,70 @@ export default function App() {
 
   const loadNewReleases = useCallback(async () => {
     if (state.subscriptions.length === 0) return;
-    setIsLoadingNewReleases(true);
+    setIsRefreshingNewReleases(true);
     try {
-      const results = await Promise.allSettled(
-        state.subscriptions.map(sub => fetchPodcastFeed(sub.feedUrl))
-      );
-      
       const allNewEpisodes: Episode[] = [];
-      results.forEach(result => {
-        if (result.status === 'fulfilled') {
-          allNewEpisodes.push(...result.value.episodes.slice(0, 10));
-        }
-      });
+      const batchSize = 10;
       
-      allNewEpisodes.sort((a, b) => {
-        const dateA = new Date(a.pubDate).getTime();
-        const dateB = new Date(b.pubDate).getTime();
-        if (isNaN(dateA) && isNaN(dateB)) return 0;
-        if (isNaN(dateA)) return 1;
-        if (isNaN(dateB)) return -1;
-        return dateB - dateA;
-      });
+      for (let i = 0; i < state.subscriptions.length; i += batchSize) {
+        const batch = state.subscriptions.slice(i, i + batchSize);
+        const results = await Promise.allSettled(
+          batch.map(sub => fetchPodcastFeed(sub.feedUrl))
+        );
+        
+        results.forEach(result => {
+          if (result.status === 'fulfilled') {
+            allNewEpisodes.push(...result.value.episodes.slice(0, 10));
+          }
+        });
+
+        // Progressive update
+        const currentSorted = [...allNewEpisodes].sort((a, b) => {
+          const dateA = new Date(a.pubDate).getTime();
+          const dateB = new Date(b.pubDate).getTime();
+          if (isNaN(dateA) && isNaN(dateB)) return 0;
+          if (isNaN(dateA)) return 1;
+          if (isNaN(dateB)) return -1;
+          return dateB - dateA;
+        });
+
+        updateState(prev => ({ 
+          ...prev, 
+          newReleases: currentSorted.slice(0, 100)
+        }));
+      }
       
-      setNewReleases(allNewEpisodes.slice(0, 100));
+      updateState(prev => ({ 
+        ...prev, 
+        lastRefresh: Date.now()
+      }));
     } catch (err) {
       console.error('Error loading new releases:', err);
     } finally {
-      setIsLoadingNewReleases(false);
+      setIsRefreshingNewReleases(false);
     }
-  }, [state.subscriptions]);
+  }, [state.subscriptions, updateState]);
+
+  // Background Refresh Effect
+  useEffect(() => {
+    const ONE_HOUR = 60 * 60 * 1000;
+    const now = Date.now();
+    const shouldRefresh = !state.lastRefresh || (now - state.lastRefresh > ONE_HOUR);
+    
+    if (state.subscriptions.length > 0 && shouldRefresh && storageMode) {
+      // Small delay on mount to avoid competing with initial loads
+      const timer = setTimeout(() => {
+        loadNewReleases();
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [state.subscriptions.length, state.lastRefresh, storageMode, loadNewReleases]);
 
   useEffect(() => {
-    if (viewMode === 'new-releases' && newReleases.length === 0 && state.subscriptions.length > 0) {
+    if (viewMode === 'new-releases' && state.newReleases.length === 0 && state.subscriptions.length > 0) {
       loadNewReleases();
     }
-  }, [viewMode, newReleases.length, state.subscriptions.length, loadNewReleases]);
+  }, [viewMode, state.newReleases.length, state.subscriptions.length, loadNewReleases]);
 
   const loadMoreEpisodes = useCallback(() => {
     if (episodes.length < allEpisodes.length) {
@@ -745,22 +773,30 @@ export default function App() {
           ) : viewMode === 'new-releases' ? (
             <div className="animate-in fade-in duration-500">
               <div className="flex justify-between items-center mb-8">
-                <h1 className="text-3xl font-black">New Releases</h1>
+                <div>
+                  <h1 className="text-3xl font-black mb-1">New Releases</h1>
+                  {state.lastRefresh && (
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">
+                      Last updated: {new Date(state.lastRefresh).toLocaleString()}
+                    </p>
+                  )}
+                </div>
                 <button 
                   onClick={loadNewReleases}
-                  className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-white"
+                  disabled={isRefreshingNewReleases}
+                  className={`p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-white ${isRefreshingNewReleases ? 'opacity-50 cursor-not-allowed' : ''}`}
                   title="Refresh New Releases"
                 >
-                  <RotateCw size={20} className={isLoadingNewReleases ? "animate-spin" : ""} />
+                  <RotateCw size={20} className={isRefreshingNewReleases ? "animate-spin" : ""} />
                 </button>
               </div>
               
-              {isLoadingNewReleases && newReleases.length === 0 ? (
+              {isRefreshingNewReleases && state.newReleases.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-blue-500 space-y-4">
                   <Loader2 size={32} className="animate-spin" />
                   <span className="font-bold">Fetching latest episodes...</span>
                 </div>
-              ) : newReleases.length === 0 ? (
+              ) : state.newReleases.length === 0 ? (
                 <div className="flex flex-col items-center justify-center text-slate-500 mt-20">
                    <Clock size={64} className="mb-4 opacity-10" />
                    <p className="text-lg font-bold opacity-20">No new releases found.</p>
@@ -768,7 +804,13 @@ export default function App() {
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {newReleases.map(e => {
+                  {isRefreshingNewReleases && (
+                    <div className="flex items-center justify-center py-2 text-blue-500 bg-blue-500/10 rounded-lg mb-4 animate-pulse">
+                      <Loader2 size={14} className="animate-spin mr-2" />
+                      <span className="text-[10px] font-bold uppercase">Refreshing in background...</span>
+                    </div>
+                  )}
+                  {state.newReleases.map(e => {
                     const podcast = state.subscriptions.find(s => s.feedUrl === e.podcastId);
                     const isDownloaded = downloadedEpisodes.some(d => d.id === e.id);
                     const isDownloading = downloadingIds.has(e.id);

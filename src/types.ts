@@ -28,10 +28,13 @@ export interface AppState {
   subscriptions: Podcast[];
   playbackProgress: Record<string, PlaybackProgress>;
   queue: Episode[];
+  newReleases: Episode[];
+  lastRefresh?: number;
 }
 
 export const INITIAL_STATE: AppState = {
   subscriptions: [],
   playbackProgress: {},
   queue: [],
+  newReleases: [],
 };
