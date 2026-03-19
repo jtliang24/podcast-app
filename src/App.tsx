@@ -3,7 +3,7 @@ import { useFileSystem } from './hooks/useFileSystem';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { saveDownload, getAllDownloadedEpisodes, getAudioBlob, deleteDownload } from './services/storageService';
 import type { Podcast, Episode, PlaybackProgress, SortOrder } from './types';
-import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save, List, X, ChevronUp, MoreVertical, Link as LinkIcon, Podcast as PodcastIcon, Clock } from 'lucide-react';
+import { Search, Plus, Play, Pause, FolderOpen, Download, Upload, Trash2, AlertCircle, RotateCcw, RotateCw, Loader2, ChevronDown, ArrowDownToLine, CheckCircle2, HardDrive, FileJson, Save, List, X, ChevronUp, MoreVertical, Link as LinkIcon, Podcast as PodcastIcon, Clock, Check, History } from 'lucide-react';
 
 // Sub-component for individual episodes to prevent entire list re-renders
 const EpisodeItem = React.memo(({
@@ -15,7 +15,10 @@ const EpisodeItem = React.memo(({
   onDownload,
   onDeleteDownload,
   onAddToQueue,
-  artworkUrl
+  artworkUrl,
+  isPlayed,
+  onTogglePlayed,
+  onMarkOlderAsPlayed
 }: {
   episode: Episode,
   isCurrent: boolean,
@@ -25,7 +28,10 @@ const EpisodeItem = React.memo(({
   onDownload: (e: Episode) => void,
   onDeleteDownload: (id: string) => void,
   onAddToQueue: (e: Episode, position: 'top' | 'bottom') => void,
-  artworkUrl?: string
+  artworkUrl?: string,
+  isPlayed?: boolean,
+  onTogglePlayed?: (id: string, played: boolean) => void,
+  onMarkOlderAsPlayed?: (e: Episode) => void
 }) => {
   const dateStr = useMemo(() => {
     try {
@@ -37,29 +43,32 @@ const EpisodeItem = React.memo(({
   const [showMenu, setShowMenu] = useState(false);
 
   return (
-    <div className={`w-full p-4 rounded-xl hover:bg-white/5 flex items-center justify-between group transition-colors ${isCurrent ? 'bg-blue-500/10' : ''}`}>
+    <div className={`w-full p-4 rounded-xl hover:bg-white/5 flex items-center justify-between group transition-colors ${isCurrent ? 'bg-blue-500/10' : ''} ${isPlayed ? 'opacity-50' : ''}`}>
       <div className="flex items-center flex-1 min-w-0 mr-4">
         {artworkUrl ? (
-          <img 
-            src={artworkUrl} 
-            className="w-10 h-10 rounded shadow-lg mr-4 bg-slate-800 flex-shrink-0 object-cover" 
-            alt="" 
+          <img
+            src={artworkUrl}
+            className="w-10 h-10 rounded shadow-lg mr-4 bg-slate-800 flex-shrink-0 object-cover"
+            alt=""
           />
         ) : (
           <div className="w-10 h-10 rounded shadow-lg mr-4 bg-slate-800 flex items-center justify-center flex-shrink-0 text-slate-500">
             <PodcastIcon size={20} />
           </div>
         )}
-        <button onClick={() => onPlay(episode)} className="flex-1 text-left min-w-0 cursor-pointer">
-          <div className={`font-bold text-sm truncate ${isCurrent ? 'text-blue-400' : 'text-slate-200'}`}>{episode.title}</div>
-          <div className="text-[10px] text-slate-500 mt-1">{dateStr}</div>
+        <button onClick={() => onPlay(episode)} className="flex-1 text-left min-w-0 cursor-pointer flex items-center">
+          <div className="min-w-0 flex-1">
+            <div className={`font-bold text-sm truncate ${isCurrent ? 'text-blue-400' : 'text-slate-200'}`}>{episode.title}</div>
+            <div className="text-[10px] text-slate-500 mt-1">{dateStr}</div>
+          </div>
+          {isPlayed && <Check size={16} className="ml-2 text-slate-500 flex-shrink-0" />}
         </button>
       </div>
-      
+
       <div className="flex items-center space-x-2">
         <div className="relative">
-          <button 
-            onClick={() => setShowMenu(!showMenu)} 
+          <button
+            onClick={() => setShowMenu(!showMenu)}
             onBlur={() => setTimeout(() => setShowMenu(false), 200)}
             className="p-2 rounded-full text-slate-400 hover:text-white bg-slate-800 opacity-0 group-hover:opacity-100 transition-all"
           >
@@ -67,22 +76,37 @@ const EpisodeItem = React.memo(({
           </button>
           {showMenu && (
             <div className="absolute right-0 bottom-full mb-2 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
-              <button 
+              <button
                 onClick={() => onAddToQueue(episode, 'top')}
                 className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-blue-600 transition-colors flex items-center"
               >
                 <ChevronUp size={14} className="mr-2" /> Play Next
               </button>
-              <button 
+              <button
                 onClick={() => onAddToQueue(episode, 'bottom')}
                 className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-slate-700 border-t border-slate-700 transition-colors flex items-center"
               >
                 <List size={14} className="mr-2" /> Add to Queue
               </button>
+              {onTogglePlayed && (
+                <button
+                  onClick={() => onTogglePlayed(episode.id, !isPlayed)}
+                  className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-slate-700 border-t border-slate-700 transition-colors flex items-center"
+                >
+                  <Check size={14} className="mr-2" /> Mark as {isPlayed ? 'Unplayed' : 'Played'}
+                </button>
+              )}
+              {onMarkOlderAsPlayed && (
+                <button
+                  onClick={() => onMarkOlderAsPlayed(episode)}
+                  className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-slate-700 border-t border-slate-700 transition-colors flex items-center"
+                >
+                  <History size={14} className="mr-2" /> Mark Older as Played
+                </button>
+              )}
             </div>
           )}
         </div>
-
         {downloadStatus === 'none' && (
           <button onClick={() => onDownload(episode)} className="p-2 rounded-full text-slate-400 hover:text-white bg-slate-800 opacity-0 group-hover:opacity-100 transition-all">
             <ArrowDownToLine size={16} />
@@ -563,7 +587,48 @@ export default function App() {
     }
   }, [state.queue, downloadedEpisodes, downloadingIds]);
 
+  const toggleEpisodePlayed = useCallback((episodeId: string, played: boolean) => {
+    updateState(prev => ({
+      ...prev,
+      playedEpisodes: {
+        ...prev.playedEpisodes,
+        [episodeId]: played
+      }
+    }));
+  }, [updateState]);
+
+  const handleMarkOlderAsPlayed = useCallback((episode: Episode) => {
+    const beforeDate = new Date(episode.pubDate).getTime();
+    const olderEpisodeIds = allEpisodes
+      .filter(e => new Date(e.pubDate).getTime() < beforeDate)
+      .map(e => e.id);
+
+    if (olderEpisodeIds.length === 0) return;
+
+    updateState(prev => {
+      const newPlayed = { ...prev.playedEpisodes };
+      olderEpisodeIds.forEach(id => {
+        newPlayed[id] = true;
+      });
+      return { ...prev, playedEpisodes: newPlayed };
+    });
+  }, [allEpisodes, updateState]);
+
+  const toggleHidePlayed = useCallback((contextId: string, hidden: boolean) => {
+    updateState(prev => ({
+      ...prev,
+      hidePlayedEpisodes: {
+        ...prev.hidePlayedEpisodes,
+        [contextId]: hidden
+      }
+    }));
+  }, [updateState]);
+
   const handleEpisodeEnded = useCallback(() => {
+    if (currentEpisode) {
+      toggleEpisodePlayed(currentEpisode.id, true);
+    }
+    
     if (state.queue.length > 0) {
       const nextEpisode = state.queue[0];
       updateState(prev => ({ ...prev, queue: prev.queue.slice(1) }));
@@ -571,7 +636,7 @@ export default function App() {
     } else {
       setIsPlaying(false);
     }
-  }, [state.queue, updateState, playEpisode]);
+  }, [state.queue, updateState, playEpisode, currentEpisode, toggleEpisodePlayed]);
 
   const handleImportOPML = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -820,14 +885,25 @@ export default function App() {
                     </p>
                   )}
                 </div>
-                <button 
-                  onClick={loadNewReleases}
-                  disabled={isRefreshingNewReleases}
-                  className={`p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-white ${isRefreshingNewReleases ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  title="Refresh New Releases"
-                >
-                  <RotateCw size={20} className={isRefreshingNewReleases ? "animate-spin" : ""} />
-                </button>
+                <div className="flex items-center space-x-4">
+                  <label className="flex items-center space-x-2 text-sm text-slate-400 cursor-pointer hover:text-white transition-colors">
+                    <input 
+                      type="checkbox" 
+                      className="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-blue-600 focus:ring-offset-slate-900"
+                      checked={state.hidePlayedEpisodes['new-releases'] ?? true}
+                      onChange={(e) => toggleHidePlayed('new-releases', e.target.checked)}
+                    />
+                    <span>Hide Played</span>
+                  </label>
+                  <button 
+                    onClick={loadNewReleases}
+                    disabled={isRefreshingNewReleases}
+                    className={`p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-white ${isRefreshingNewReleases ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    title="Refresh New Releases"
+                  >
+                    <RotateCw size={20} className={isRefreshingNewReleases ? "animate-spin" : ""} />
+                  </button>
+                </div>
               </div>
               
               {isRefreshingNewReleases && state.newReleases.length === 0 ? (
@@ -849,7 +925,14 @@ export default function App() {
                       <span className="text-[10px] font-bold uppercase">Refreshing in background...</span>
                     </div>
                   )}
-                  {state.newReleases.map(e => {
+                  {state.newReleases.filter(e => !(state.hidePlayedEpisodes['new-releases'] ?? true) || !state.playedEpisodes[e.id]).length === 0 && !isRefreshingNewReleases ? (
+                    <div className="flex flex-col items-center justify-center text-slate-500 mt-20">
+                      <CheckCircle2 size={64} className="mb-4 opacity-10" />
+                      <p className="text-lg font-bold opacity-20">You're all caught up!</p>
+                    </div>
+                  ) : state.newReleases
+                      .filter(e => !(state.hidePlayedEpisodes['new-releases'] ?? true) || !state.playedEpisodes[e.id])
+                      .map(e => {
                     const podcast = state.subscriptions.find(s => s.feedUrl === e.podcastId);
                     const isDownloaded = downloadedEpisodes.some(d => d.id === e.id);
                     const isDownloading = downloadingIds.has(e.id);
@@ -866,6 +949,8 @@ export default function App() {
                         onDeleteDownload={handleDeleteDownload}
                         onAddToQueue={addToQueue}
                         artworkUrl={podcast?.artworkUrl}
+                        isPlayed={state.playedEpisodes[e.id]}
+                        onTogglePlayed={toggleEpisodePlayed}
                       />
                     );
                   })}
@@ -896,11 +981,20 @@ export default function App() {
                   </div>
                 </div>
                 
-                <div className="pb-2">
+                <div className="pb-2 flex items-center space-x-4">
+                  <label className="flex items-center space-x-2 text-sm text-slate-400 cursor-pointer hover:text-white transition-colors">
+                    <input 
+                      type="checkbox" 
+                      className="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-blue-600 focus:ring-offset-slate-900"
+                      checked={state.hidePlayedEpisodes[selectedPodcast.feedUrl] ?? true}
+                      onChange={(e) => toggleHidePlayed(selectedPodcast.feedUrl, e.target.checked)}
+                    />
+                    <span>Hide Played</span>
+                  </label>
                   <select 
                     value={state.podcastSortOrders[selectedPodcast.feedUrl] || 'newest'} 
                     onChange={(e) => handleSortChange(e.target.value as SortOrder)}
-                    className="bg-slate-900 border border-slate-800 text-slate-300 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 outline-none cursor-pointer hover:bg-slate-800 transition-colors"
+                    className="bg-slate-900 border border-slate-800 text-slate-300 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none cursor-pointer hover:bg-slate-800 transition-colors"
                   >
                     <option value="newest">Newest to Oldest</option>
                     <option value="oldest">Oldest to Newest</option>
@@ -910,38 +1004,42 @@ export default function App() {
                     <option value="shortest">Shortest First</option>
                   </select>
                 </div>
-              </div>
-              
-              <div className="space-y-1">
+                </div>
+
+                <div className="space-y-1">
                 {isLoadingEpisodes && (
                   <div className="flex items-center justify-center py-12 text-blue-500">
                     <Loader2 className="animate-spin mr-2" />
                     <span className="font-bold text-sm">Fetching Episodes...</span>
                   </div>
                 )}
-                {episodes.map(e => {
+                {episodes
+                  .filter(e => !(state.hidePlayedEpisodes[selectedPodcast.feedUrl] ?? true) || !state.playedEpisodes[e.id])
+                  .map(e => {
                   const isDownloaded = downloadedEpisodes.some(d => d.id === e.id);
                   const isDownloading = downloadingIds.has(e.id);
                   const status = isDownloaded ? 'downloaded' : (isDownloading ? 'downloading' : 'none');
 
                   return (
-                    <EpisodeItem 
-                      key={e.id} 
-                      episode={e} 
-                      isCurrent={currentEpisode?.id === e.id} 
-                      isPlaying={isPlaying} 
+                    <EpisodeItem
+                      key={e.id}
+                      episode={e}
+                      isCurrent={currentEpisode?.id === e.id}
+                      isPlaying={isPlaying}
                       onPlay={playEpisode}
                       downloadStatus={status}
                       onDownload={handleDownload}
                       onDeleteDownload={handleDeleteDownload}
                       onAddToQueue={addToQueue}
                       artworkUrl={selectedPodcast.artworkUrl}
+                      isPlayed={state.playedEpisodes[e.id]}
+                      onTogglePlayed={toggleEpisodePlayed}
+                      onMarkOlderAsPlayed={handleMarkOlderAsPlayed}
                     />
                   );
                 })}
 
-                {episodes.length < allEpisodes.length && !isLoadingEpisodes && (
-                  <div className="py-8 flex justify-center">
+                {episodes.length < allEpisodes.length && !isLoadingEpisodes && (                  <div className="py-8 flex justify-center">
                     <button 
                       onClick={loadMoreEpisodes}
                       className="flex items-center space-x-2 px-8 py-3 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-2xl font-bold text-sm transition-all"
