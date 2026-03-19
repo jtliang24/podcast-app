@@ -4,6 +4,44 @@ import { INITIAL_STATE } from '../types';
 
 type StorageMode = 'file-system-access' | 'opfs';
 
+const DB_NAME = 'PodcastFileDB';
+const STORE_NAME = 'handles';
+
+function getDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
+        request.result.createObjectStore(STORE_NAME);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveHandleToIDB(handle: FileSystemFileHandle) {
+  const db = await getDB();
+  return new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.put(handle, 'stateFileHandle');
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function getHandleFromIDB(): Promise<FileSystemFileHandle | undefined> {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.get('stateFileHandle');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
 export function useFileSystem() {
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [state, setState] = useState<AppState>(INITIAL_STATE);
@@ -19,11 +57,38 @@ export function useFileSystem() {
   // Check support on mount
   const isFileSystemAccessSupported = 'showOpenFilePicker' in window;
 
-  // Initialize OPFS if needed
+  // Initialize OPFS or try to load saved handle
   useEffect(() => {
     if (!isFileSystemAccessSupported) {
       setStorageMode('opfs');
       loadFromOPFS();
+    } else {
+      // Try to load saved handle from IndexedDB
+      getHandleFromIDB()
+        .then(async handle => {
+          if (handle) {
+            try {
+              // Verify we still have permission (might prompt user)
+              const options: FileSystemHandlePermissionDescriptor = { mode: 'readwrite' };
+              let permission = await handle.queryPermission(options);
+              
+              if (permission !== 'granted') {
+                permission = await handle.requestPermission(options);
+              }
+
+              if (permission === 'granted') {
+                setFileHandle(handle);
+                setStorageMode('file-system-access');
+                await loadState(handle);
+              } else {
+                console.warn('Permission to access saved file was denied.');
+              }
+            } catch (e) {
+              console.error('Error verifying saved file handle:', e);
+            }
+          }
+        })
+        .catch(console.error);
     }
   }, [isFileSystemAccessSupported]);
 
@@ -77,6 +142,7 @@ export function useFileSystem() {
       });
       setFileHandle(handle);
       setStorageMode('file-system-access');
+      await saveHandleToIDB(handle);
       await loadState(handle);
     } catch (err) {
       console.error('Error selecting file:', err);
@@ -97,6 +163,7 @@ export function useFileSystem() {
       });
       setFileHandle(handle);
       setStorageMode('file-system-access');
+      await saveHandleToIDB(handle);
       await saveState(handle, INITIAL_STATE);
       setState(INITIAL_STATE);
     } catch (err) {
