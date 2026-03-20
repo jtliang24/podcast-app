@@ -1,11 +1,16 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import mkcert from 'vite-plugin-mkcert'
 
 // https://vite.dev/config/
 export default defineConfig({
+  server: {
+    https: {},
+  },
   plugins: [
     react(),
+    mkcert(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icons.svg'],
@@ -23,6 +28,9 @@ export default defineConfig({
         ],
         display: 'standalone',
         background_color: '#0f172a'
+      },
+      devOptions: {
+        enabled: true
       }
     })
   ],
@@ -30,3 +38,4 @@ export default defineConfig({
     'process.env': {},
   }
 })
+
