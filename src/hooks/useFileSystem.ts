@@ -46,9 +46,15 @@ export function useFileSystem() {
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const [isLoading, setIsLoading] = useState(false);
-  const [storageMode, setStorageMode] = useState<StorageMode | null>(null);
-  const [driveAccessToken, setDriveAccessToken] = useState<string | null>(null);
-  const [driveFileId, setDriveFileId] = useState<string | null>(null);
+  const [storageMode, setStorageMode] = useState<StorageMode | null>(() => {
+    return (localStorage.getItem('storageMode') as StorageMode) || null;
+  });
+  const [driveAccessToken, setDriveAccessToken] = useState<string | null>(() => {
+    return localStorage.getItem('driveAccessToken') || null;
+  });
+  const [driveFileId, setDriveFileId] = useState<string | null>(() => {
+    return localStorage.getItem('driveFileId') || null;
+  });
 
   // Keep state in a ref to always have the latest version for functional updates and I/O
   const stateRef = useRef<AppState>(state);
@@ -56,43 +62,74 @@ export function useFileSystem() {
     stateRef.current = state;
   }, [state]);
 
+  // Persist storage settings to localStorage
+  useEffect(() => {
+    if (storageMode) localStorage.setItem('storageMode', storageMode);
+    else localStorage.removeItem('storageMode');
+  }, [storageMode]);
+
+  useEffect(() => {
+    if (driveAccessToken) localStorage.setItem('driveAccessToken', driveAccessToken);
+    else localStorage.removeItem('driveAccessToken');
+  }, [driveAccessToken]);
+
+  useEffect(() => {
+    if (driveFileId) localStorage.setItem('driveFileId', driveFileId);
+    else localStorage.removeItem('driveFileId');
+  }, [driveFileId]);
+
   // Check support on mount
   const isFileSystemAccessSupported = 'showOpenFilePicker' in window;
 
-  // Initialize OPFS or try to load saved handle
+  // Initialize storage or try to load saved state
   useEffect(() => {
-    if (!isFileSystemAccessSupported) {
-      setStorageMode('opfs');
-      loadFromOPFS();
-    } else {
-      // Try to load saved handle from IndexedDB
-      getHandleFromIDB()
-        .then(async handle => {
-          if (handle) {
-            try {
-              // Verify we still have permission (might prompt user)
-              const options: FileSystemHandlePermissionDescriptor = { mode: 'readwrite' };
-              let permission = await handle.queryPermission(options);
-              
-              if (permission !== 'granted') {
-                permission = await handle.requestPermission(options);
-              }
+    const init = async () => {
+      if (storageMode === 'google-drive' && driveAccessToken && driveFileId) {
+        setIsLoading(true);
+        try {
+          const { downloadStateFile } = await import('../services/driveService');
+          const content = await downloadStateFile(driveAccessToken, driveFileId);
+          const parsed = JSON.parse(content) as Partial<AppState>;
+          setState({ ...INITIAL_STATE, ...parsed });
+        } catch (err) {
+          console.error('Error loading from Google Drive:', err);
+          // If drive fails, fallback to checking others or just stay at initial
+        } finally {
+          setIsLoading(false);
+        }
+        return;
+      }
 
-              if (permission === 'granted') {
-                setFileHandle(handle);
-                setStorageMode('file-system-access');
-                await loadState(handle);
-              } else {
-                console.warn('Permission to access saved file was denied.');
-              }
-            } catch (e) {
-              console.error('Error verifying saved file handle:', e);
+      if (!isFileSystemAccessSupported) {
+        setStorageMode('opfs');
+        await loadFromOPFS();
+      } else {
+        // Try to load saved handle from IndexedDB
+        try {
+          const handle = await getHandleFromIDB();
+          if (handle) {
+            // Verify we still have permission (might prompt user)
+            const options: FileSystemHandlePermissionDescriptor = { mode: 'readwrite' };
+            let permission = await handle.queryPermission(options);
+            
+            if (permission !== 'granted') {
+              permission = await handle.requestPermission(options);
+            }
+
+            if (permission === 'granted') {
+              setFileHandle(handle);
+              setStorageMode('file-system-access');
+              await loadState(handle);
             }
           }
-        })
-        .catch(console.error);
-    }
-  }, [isFileSystemAccessSupported]);
+        } catch (e) {
+          console.error('Error verifying saved file handle:', e);
+        }
+      }
+    };
+
+    init();
+  }, [isFileSystemAccessSupported]); // Run once on mount (isFileSystemAccessSupported is stable)
 
   const loadFromOPFS = async () => {
     setIsLoading(true);
