@@ -7,10 +7,13 @@ import mkcert from 'vite-plugin-mkcert'
 export default defineConfig({
   server: {
     https: {},
+    allowedHosts: true,
   },
   plugins: [
     react(),
-    mkcert(),
+    mkcert({
+      hosts: ['localhost', '127.0.0.1', '192.168.1.153', '192.168.1.153.sslip.io'],
+    }),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icons.svg'],
