@@ -1,8 +1,12 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { GoogleOAuthProvider } from '@react-oauth/google'
+import { registerSW } from 'virtual:pwa-register'
 import './index.css'
 import App from './App'
+
+// Register service worker for PWA support
+registerSW({ immediate: true })
 
 const container = document.getElementById('root');
 if (container) {
