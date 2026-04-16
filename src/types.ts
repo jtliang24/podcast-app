@@ -36,6 +36,7 @@ export interface AppState {
   podcastSortOrders: Record<string, SortOrder>;
   playedEpisodes: Record<string, boolean>;
   hidePlayedEpisodes: Record<string, boolean>;
+  lastPlayingEpisode?: Episode | null;
 }
 
 export const INITIAL_STATE: AppState = {
@@ -46,4 +47,5 @@ export const INITIAL_STATE: AppState = {
   podcastSortOrders: {},
   playedEpisodes: {},
   hidePlayedEpisodes: {},
+  lastPlayingEpisode: null,
 };
