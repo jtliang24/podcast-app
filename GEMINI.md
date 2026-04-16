@@ -15,24 +15,29 @@ A portable, local-first podcast listening application built with **React**, **Ty
 
 ## Architecture
 The application follows a "local-first" architecture with a hybrid storage model:
-1.  **State Management (Synced):** App state (subscriptions, playback progress, played status, and per-podcast sort/filter settings) is managed in a local JSON file (Desktop), internally in the browser's OPFS (Mobile), or synced via Google Drive. Data portability is ensured via manual **Import/Export** or automated Cloud Sync.
+1.  **State Management (Synced):** App state (subscriptions, playback progress, played status, per-podcast sort/filter settings, and the last playing episode) is managed in a local JSON file (Desktop), internally in the browser's OPFS (Mobile), or synced via Google Drive. Data portability is ensured via manual **Import/Export** or automated Cloud Sync.
 2.  **Download Management (Device-Specific):** Audio files and their associated metadata are stored in **IndexedDB**. This ensures downloads are persistent across sessions but remain specific to the local device.
-3.  **File Handle Persistence:** On Desktop, the application stores the `FileSystemFileHandle` in IndexedDB. On startup, it automatically attempts to restore access to the previous state file, prompting only for permissions if needed.
-4.  **Service Layer:** 
+3.  **Session Restoration:** On startup, the application automatically restores the state from the synced JSON file. It identifies the last played episode and pre-loads it into the player, restoring the exact playback position and metadata even across complete application restarts.
+4.  **File Handle Persistence:** On Desktop, the application stores the `FileSystemFileHandle` in IndexedDB. On startup, it automatically attempts to restore access to the previous state file, prompting only for permissions if needed.
+5.  **Service Layer:** 
     - `src/services/podcastService.ts`: Handles RSS/OPML parsing and iTunes search logic. Uses CORS proxies for browser compatibility.
     - `src/services/storageService.ts`: Manages the IndexedDB lifecycle for offline episode storage.
     - `src/services/driveService.ts`: Handles Google Drive API interactions for cloud synchronization.
-5.  **Hooks:** 
+6.  **Hooks:** 
     - `src/hooks/useFileSystem.ts`: Abstracts platform-specific storage logic, file handle persistence, and cloud sync.
-    - `src/hooks/usePodcastPlayer.ts`: Manages audio playback state, queue logic, progress tracking, and **Media Session API** integration for system-level controls.
-6.  **Playback Logic:** 
+    - `src/hooks/usePodcastPlayer.ts`: Manages audio playback state, queue logic, progress tracking, session restoration, and **Media Session API** integration for system-level controls.
+7.  **Playback Logic:** 
     - Automatically checks for offline audio in IndexedDB before streaming from the web.
     - Initiates background downloads when playing a remote episode.
     - Automatically marks episodes as "played" upon completion.
-    - Periodically auto-saves playback position to the local/cloud state file (throttled for performance).
+    - Periodically auto-saves playback position and current episode to the local/cloud state file (throttled for performance).
     - Integrates with system media controls for play/pause, seeking, and metadata display.
 
 ## Features
+- **Progressive Web App (PWA)**: Installable as a standalone application with service worker support.
+- **Persistent Player Bar**: A permanent playback control bar at the bottom of the screen provides constant access to playback status, seek controls, and the play queue, regardless of whether an episode is currently active.
+- **Session Continuity**: Automatically remembers and pre-loads the last playing episode and its exact timestamp when the app is reopened.
+- **Smart Queue Management**: Manages playback order, ensuring the currently playing episode remains securely at the top of the queue. Allows direct playback from any item in the queue.
 - **Cloud Sync (Google Drive)**: Secure synchronization of app state across devices using Google Drive's hidden `appDataFolder`.
 - **System Media Controls**: Full integration with the browser's Media Session API, allowing control via OS-level media widgets, lock screens, and hardware buttons. Includes rich metadata and high-quality artwork.
 - **New Releases**: A dedicated view aggregating the latest episodes from all subscriptions. Uses batched fetching (10 at a time) and progressive UI updates for high performance.

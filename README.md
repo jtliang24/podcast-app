@@ -1,73 +1,63 @@
-# React + TypeScript + Vite
+# 🎙️ Portable Podcast Player
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A modern, local-first podcast listening application designed for privacy, portability, and performance. Built with React, TypeScript, and Tailwind CSS.
 
-Currently, two official plugins are available:
+## ✨ Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **🚀 Local-First Architecture**: Your data stays with you. Subscriptions and preferences are stored in a single JSON file.
+- **☁️ Cloud Sync**: Seamlessly synchronize your library and playback progress across devices using Google Drive (via the secure `appDataFolder`).
+- **📥 Offline Listening**: Download episodes directly to your browser's IndexedDB for playback without an internet connection.
+- **🔄 Session Continuity**: Automatically remembers your last played episode and exact timestamp, even after closing the app.
+- **📱 PWA Support**: Installable on Desktop and Mobile for a native-like experience.
+- **🎵 System Integration**: Full support for the Media Session API, allowing control via lock screens, hardware buttons, and system media widgets.
+- **📑 OPML Support**: Easily import or export your podcast subscriptions using standard OPML files.
+- **🕒 Smart Queue**: Manage your listening order with a persistent, reorderable queue that stays in sync across sessions.
 
-## React Compiler
+## 🛠️ Technology Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Frontend**: React 19, TypeScript, Vite 6
+- **Styling**: Tailwind CSS
+- **Persistence**: File System Access API, Origin Private File System (OPFS), IndexedDB, Google Drive API
+- **Icons**: Lucide React
+- **Audio**: HTML5 Audio + Media Session API
 
-## Expanding the ESLint configuration
+## 🚀 Getting Started
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Prerequisites
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- Node.js (Latest LTS recommended)
+- [Nix](https://nixos.org/) (Optional, for a consistent development environment)
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+### Installation
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/your-username/podcast-player.git
+   cd podcast-player
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Set up environment variables:
+   Copy `.env.example` to `.env` and add your Google Drive API credentials if you want to enable Cloud Sync.
+
+### Development
+
+Run the development server with HTTPS enabled:
+```bash
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Building
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Build the project for production:
+```bash
+npm run build
 ```
+
+## 📜 License
+
+This project is licensed under the MIT License.
