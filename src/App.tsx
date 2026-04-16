@@ -768,22 +768,21 @@ export default function App() {
         </div>
       </main>
 
-      {currentEpisode && (
-        <PodcastPlayer 
-          state={state}
-          currentEpisode={currentEpisode}
-          playingPodcast={playingPodcast}
-          isPlaying={isPlaying}
-          currentTime={currentTime}
-          duration={duration}
-          togglePlay={togglePlay}
-          skip={skip}
-          handleSeek={handleSeek}
-          formatTime={formatTime}
-          reorderQueue={reorderQueue}
-          removeFromQueue={removeFromQueue}
-        />
-      )}
+      <PodcastPlayer 
+        state={state}
+        currentEpisode={currentEpisode}
+        playingPodcast={playingPodcast}
+        isPlaying={isPlaying}
+        currentTime={currentTime}
+        duration={duration}
+        togglePlay={togglePlay}
+        playEpisode={playEpisode}
+        skip={skip}
+        handleSeek={handleSeek}
+        formatTime={formatTime}
+        reorderQueue={reorderQueue}
+        removeFromQueue={removeFromQueue}
+      />
       <audio 
         ref={audioRef} 
         onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}

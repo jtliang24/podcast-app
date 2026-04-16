@@ -7,12 +7,13 @@ import type { Episode, Podcast, AppState } from '../types';
 
 interface PodcastPlayerProps {
   state: AppState;
-  currentEpisode: Episode;
+  currentEpisode: Episode | null;
   playingPodcast: Podcast | null;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
   togglePlay: () => void;
+  playEpisode: (episode: Episode) => void;
   skip: (seconds: number) => void;
   handleSeek: (e: React.ChangeEvent<HTMLInputElement>) => void;
   formatTime: (time: number) => string;
@@ -28,6 +29,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
   currentTime,
   duration,
   togglePlay,
+  playEpisode,
   skip,
   handleSeek,
   formatTime,
@@ -59,14 +61,14 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
             ) : (
               state.queue.map((e, i) => {
                 const podcast = state.subscriptions.find(s => s.feedUrl === e.podcastId);
-                const isPlaying = currentEpisode.id === e.id;
+                const isItemCurrent = currentEpisode?.id === e.id;
                 return (
                   <div key={e.id} className={`group p-3 rounded-xl border flex items-center space-x-3 transition-colors ${
-                    isPlaying 
+                    isItemCurrent 
                       ? 'bg-blue-600/20 border-blue-500/50' 
                       : 'bg-slate-800/40 border-slate-800/50'
                   }`}>
-                    <div className={`text-[10px] font-mono font-black w-4 ${isPlaying ? 'text-blue-400' : 'text-slate-600'}`}>{i + 1}</div>
+                    <div className={`text-[10px] font-mono font-black w-4 ${isItemCurrent ? 'text-blue-400' : 'text-slate-600'}`}>{i + 1}</div>
                     {podcast?.artworkUrl ? (
                       <img src={podcast.artworkUrl} className="w-8 h-8 rounded shadow-lg bg-slate-800 flex-shrink-0 object-cover" alt="" />
                     ) : (
@@ -75,19 +77,20 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
                       </div>
                     )}
                     <div className="flex-1 min-w-0">
-                      <div className={`text-xs font-bold truncate ${isPlaying ? 'text-blue-400' : ''}`}>{e.title}</div>
+                      <div className={`text-xs font-bold truncate ${isItemCurrent ? 'text-blue-400' : ''}`}>{e.title}</div>
                       <div className="text-[10px] text-slate-500 truncate">{podcast?.title || e.podcastId}</div>
                     </div>
-                    {!isPlaying && (
+                    {!isItemCurrent && (
                       <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => playEpisode(e)} className="p-1 hover:text-blue-400" title="Play Now"><Play size={14} fill="currentColor" /></button>
                         <button onClick={() => reorderQueue(e.id, 'up')} className="p-1 hover:text-blue-400"><ChevronUp size={14} /></button>
                         <button onClick={() => reorderQueue(e.id, 'down')} className="p-1 hover:text-blue-400"><ChevronDown size={14} /></button>
                         <button onClick={() => removeFromQueue(e.id)} className="p-1 hover:text-red-400 ml-1"><Trash2 size={14} /></button>
                       </div>
                     )}
-                    {isPlaying && (
-                      <div className="flex items-center space-x-1 text-blue-500 animate-pulse">
-                        <Play size={14} fill="currentColor" />
+                    {isItemCurrent && (
+                      <div className="flex items-center space-x-1 text-blue-500">
+                        {isPlaying ? <div className="animate-pulse"><Play size={14} fill="currentColor" /></div> : <Pause size={14} fill="currentColor" />}
                       </div>
                     )}
                   </div>
@@ -100,22 +103,40 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
       <div className="max-w-screen-2xl mx-auto flex flex-col items-center">
         <div className="w-full flex items-center justify-between mb-2">
           <div className="flex items-center space-x-4 w-1/3 min-w-0">
-            <img src={playingPodcast?.artworkUrl || currentEpisode.audioUrl} className="w-12 h-12 rounded shadow-lg bg-slate-800" alt="" />
+            {currentEpisode || playingPodcast ? (
+              <img src={playingPodcast?.artworkUrl || currentEpisode?.audioUrl} className="w-12 h-12 rounded shadow-lg bg-slate-800" alt="" />
+            ) : (
+              <div className="w-12 h-12 rounded shadow-lg bg-slate-800 flex items-center justify-center text-slate-600">
+                <PodcastIcon size={24} />
+              </div>
+            )}
             <div className="min-w-0">
-              <div className="font-bold truncate text-sm">{currentEpisode.title}</div>
-              <div className="text-[10px] text-blue-400 font-bold truncate uppercase tracking-wider">{playingPodcast?.title || 'Unknown Podcast'}</div>
+              <div className="font-bold truncate text-sm">{currentEpisode?.title || 'No episode selected'}</div>
+              <div className="text-[10px] text-blue-400 font-bold truncate uppercase tracking-wider">{playingPodcast?.title || (currentEpisode ? 'Unknown Podcast' : 'Ready to listen')}</div>
             </div>
           </div>
 
           <div className="flex items-center justify-center space-x-10 w-1/3">
-            <button onClick={() => skip(-15)} className="text-slate-500 hover:text-white transition-colors flex flex-col items-center">
+            <button 
+              onClick={() => skip(-15)} 
+              disabled={!currentEpisode}
+              className="text-slate-500 hover:text-white disabled:opacity-30 disabled:hover:text-slate-500 transition-colors flex flex-col items-center"
+            >
               <RotateCcw size={22} />
               <span className="text-[8px] font-black mt-1">15s</span>
             </button>
-            <button onClick={togglePlay} className="bg-white text-slate-900 w-14 h-14 rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-xl">
+            <button 
+              onClick={togglePlay} 
+              disabled={!currentEpisode}
+              className="bg-white text-slate-900 w-14 h-14 rounded-full flex items-center justify-center hover:scale-105 active:scale-95 disabled:opacity-30 disabled:hover:scale-100 transition-all shadow-xl"
+            >
               {isPlaying ? <Pause fill="currentColor" size={28} /> : <Play fill="currentColor" size={28} className="ml-1" />}
             </button>
-            <button onClick={() => skip(30)} className="text-slate-500 hover:text-white transition-colors flex flex-col items-center">
+            <button 
+              onClick={() => skip(30)} 
+              disabled={!currentEpisode}
+              className="text-slate-500 hover:text-white disabled:opacity-30 disabled:hover:text-slate-500 transition-colors flex flex-col items-center"
+            >
               <RotateCw size={22} />
               <span className="text-[8px] font-black mt-1">30s</span>
             </button>
@@ -141,7 +162,8 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
             step="0.1"
             value={currentTime}
             onChange={handleSeek}
-            className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 transition-all"
+            disabled={!currentEpisode}
+            className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 disabled:opacity-30 disabled:cursor-default transition-all"
           />
         </div>
       </div>
