@@ -19,12 +19,49 @@ export function usePodcastPlayer({
   handleDownload,
   toggleEpisodePlayed
 }: UsePodcastPlayerProps) {
-  const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
+  const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(state.lastPlayingEpisode || null);
   const [playingPodcast, setPlayingPodcast] = useState<Podcast | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Initialize from state when it loads
+  useEffect(() => {
+    if (state.lastPlayingEpisode && !currentEpisode) {
+      setCurrentEpisode(state.lastPlayingEpisode);
+      const podcast = state.subscriptions.find(s => s.feedUrl === state.lastPlayingEpisode?.podcastId);
+      setPlayingPodcast(podcast || null);
+    }
+  }, [state.lastPlayingEpisode, state.subscriptions, currentEpisode]);
+
+  // Preload audio metadata and saved position
+  useEffect(() => {
+    async function preload() {
+      if (currentEpisode && audioRef.current && !audioRef.current.src) {
+        const savedProgress = state.playbackProgress[currentEpisode.audioUrl];
+        const isDownloaded = downloadedEpisodes.some(d => d.id === currentEpisode.id);
+        
+        if (isDownloaded) {
+          const blob = await getAudioBlob(currentEpisode.id);
+          if (blob) {
+            audioRef.current.src = URL.createObjectURL(blob);
+          } else {
+            audioRef.current.src = currentEpisode.audioUrl;
+          }
+        } else {
+          audioRef.current.src = currentEpisode.audioUrl;
+        }
+
+        if (savedProgress) {
+          audioRef.current.currentTime = savedProgress.currentTime;
+          setCurrentTime(savedProgress.currentTime);
+          setDuration(savedProgress.duration);
+        }
+      }
+    }
+    preload();
+  }, [currentEpisode, state.playbackProgress, downloadedEpisodes]);
 
   const saveProgress = useCallback((episodeUrl: string, currentTime: number, duration: number) => {
     if (!storageMode) return;
@@ -150,10 +187,14 @@ export function usePodcastPlayer({
       saveProgress(currentEpisode.audioUrl, audioRef.current.currentTime, audioRef.current.duration);
     }
 
-    // Ensure currently playing episode is at the top of the queue
+    // Ensure currently playing episode is at the top of the queue and save lastPlayingEpisode
     updateState(prev => {
       const otherEpisodes = prev.queue.filter(e => e.id !== episode.id);
-      return { ...prev, queue: [episode, ...otherEpisodes] };
+      return { 
+        ...prev, 
+        queue: [episode, ...otherEpisodes],
+        lastPlayingEpisode: episode
+      };
     });
 
     const podcast = state.subscriptions.find(s => s.feedUrl === episode.podcastId);
@@ -190,7 +231,7 @@ export function usePodcastPlayer({
       }
       audioRef.current.play().catch(console.error);
     }
-  }, [currentEpisode, state.playbackProgress, state.subscriptions, state.queue, downloadedEpisodes, togglePlay, saveProgress, handleDownload, updateState]);
+  }, [currentEpisode, state.playbackProgress, state.subscriptions, downloadedEpisodes, togglePlay, saveProgress, handleDownload, updateState]);
 
   const handleEpisodeEnded = useCallback(() => {
     if (currentEpisode) {
