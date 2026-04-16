@@ -59,9 +59,14 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
             ) : (
               state.queue.map((e, i) => {
                 const podcast = state.subscriptions.find(s => s.feedUrl === e.podcastId);
+                const isPlaying = currentEpisode.id === e.id;
                 return (
-                  <div key={e.id} className="group bg-slate-800/40 p-3 rounded-xl border border-slate-800/50 flex items-center space-x-3">
-                    <div className="text-[10px] font-mono font-black text-slate-600 w-4">{i + 1}</div>
+                  <div key={e.id} className={`group p-3 rounded-xl border flex items-center space-x-3 transition-colors ${
+                    isPlaying 
+                      ? 'bg-blue-600/20 border-blue-500/50' 
+                      : 'bg-slate-800/40 border-slate-800/50'
+                  }`}>
+                    <div className={`text-[10px] font-mono font-black w-4 ${isPlaying ? 'text-blue-400' : 'text-slate-600'}`}>{i + 1}</div>
                     {podcast?.artworkUrl ? (
                       <img src={podcast.artworkUrl} className="w-8 h-8 rounded shadow-lg bg-slate-800 flex-shrink-0 object-cover" alt="" />
                     ) : (
@@ -70,14 +75,21 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
                       </div>
                     )}
                     <div className="flex-1 min-w-0">
-                      <div className="text-xs font-bold truncate">{e.title}</div>
+                      <div className={`text-xs font-bold truncate ${isPlaying ? 'text-blue-400' : ''}`}>{e.title}</div>
                       <div className="text-[10px] text-slate-500 truncate">{podcast?.title || e.podcastId}</div>
                     </div>
-                    <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => reorderQueue(e.id, 'up')} className="p-1 hover:text-blue-400"><ChevronUp size={14} /></button>
-                      <button onClick={() => reorderQueue(e.id, 'down')} className="p-1 hover:text-blue-400"><ChevronDown size={14} /></button>
-                      <button onClick={() => removeFromQueue(e.id)} className="p-1 hover:text-red-400 ml-1"><Trash2 size={14} /></button>
-                    </div>
+                    {!isPlaying && (
+                      <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => reorderQueue(e.id, 'up')} className="p-1 hover:text-blue-400"><ChevronUp size={14} /></button>
+                        <button onClick={() => reorderQueue(e.id, 'down')} className="p-1 hover:text-blue-400"><ChevronDown size={14} /></button>
+                        <button onClick={() => removeFromQueue(e.id)} className="p-1 hover:text-red-400 ml-1"><Trash2 size={14} /></button>
+                      </div>
+                    )}
+                    {isPlaying && (
+                      <div className="flex items-center space-x-1 text-blue-500 animate-pulse">
+                        <Play size={14} fill="currentColor" />
+                      </div>
+                    )}
                   </div>
                 );
               })

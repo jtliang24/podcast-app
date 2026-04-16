@@ -150,6 +150,12 @@ export function usePodcastPlayer({
       saveProgress(currentEpisode.audioUrl, audioRef.current.currentTime, audioRef.current.duration);
     }
 
+    // Ensure currently playing episode is at the top of the queue
+    updateState(prev => {
+      const otherEpisodes = prev.queue.filter(e => e.id !== episode.id);
+      return { ...prev, queue: [episode, ...otherEpisodes] };
+    });
+
     const podcast = state.subscriptions.find(s => s.feedUrl === episode.podcastId);
     setPlayingPodcast(podcast || null);
     setCurrentEpisode(episode);
@@ -184,16 +190,26 @@ export function usePodcastPlayer({
       }
       audioRef.current.play().catch(console.error);
     }
-  }, [currentEpisode, state.playbackProgress, state.subscriptions, downloadedEpisodes, togglePlay, saveProgress, handleDownload]);
+  }, [currentEpisode, state.playbackProgress, state.subscriptions, state.queue, downloadedEpisodes, togglePlay, saveProgress, handleDownload, updateState]);
 
   const handleEpisodeEnded = useCallback(() => {
     if (currentEpisode) {
       toggleEpisodePlayed(currentEpisode.id, true);
     }
     
-    if (state.queue.length > 0) {
-      const nextEpisode = state.queue[0];
-      updateState(prev => ({ ...prev, queue: prev.queue.slice(1) }));
+    // Find what's next (assuming current is at index 0)
+    const currentQueueIndex = state.queue.findIndex(e => e.id === currentEpisode?.id);
+    const nextEpisode = currentQueueIndex !== -1 && currentQueueIndex < state.queue.length - 1 
+      ? state.queue[currentQueueIndex + 1] 
+      : (state.queue[0]?.id === currentEpisode?.id ? state.queue[1] : state.queue[0]);
+
+    // Remove the finished episode from the queue
+    updateState(prev => ({
+      ...prev,
+      queue: prev.queue.filter(e => e.id !== currentEpisode?.id)
+    }));
+
+    if (nextEpisode) {
       playEpisode(nextEpisode);
     } else {
       setIsPlaying(false);

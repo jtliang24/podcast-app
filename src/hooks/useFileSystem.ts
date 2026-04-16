@@ -240,6 +240,7 @@ export function useFileSystem() {
     const newState = typeof update === 'function' ? update(stateRef.current) : update;
     
     // Immediate state update for UI responsiveness
+    stateRef.current = newState;
     setState(newState);
     
     // Persist to disk

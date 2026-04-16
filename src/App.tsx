@@ -488,20 +488,43 @@ export default function App() {
   const addToQueue = useCallback((episode: Episode, position: 'top' | 'bottom') => {
     updateState(prev => {
       if (prev.queue.find(e => e.id === episode.id)) return prev;
-      const newQueue = position === 'top' ? [episode, ...prev.queue] : [...prev.queue, episode];
+      
+      let newQueue;
+      if (position === 'top') {
+        if (currentEpisode && prev.queue.length > 0 && prev.queue[0].id === currentEpisode.id) {
+          // If something is playing and it's at the top, add after it
+          newQueue = [prev.queue[0], episode, ...prev.queue.slice(1)];
+        } else {
+          newQueue = [episode, ...prev.queue];
+        }
+      } else {
+        newQueue = [...prev.queue, episode];
+      }
       return { ...prev, queue: newQueue };
     });
-  }, [updateState]);
+  }, [updateState, currentEpisode]);
 
   const removeFromQueue = useCallback((episodeId: string) => {
-    updateState(prev => ({ ...prev, queue: prev.queue.filter(e => e.id !== episodeId) }));
-  }, [updateState]);
+    updateState(prev => {
+      if (currentEpisode && episodeId === currentEpisode.id) return prev;
+      return { ...prev, queue: prev.queue.filter(e => e.id !== episodeId) };
+    });
+  }, [updateState, currentEpisode]);
 
   const reorderQueue = useCallback((episodeId: string, direction: 'up' | 'down') => {
     updateState(prev => {
       const index = prev.queue.findIndex(e => e.id === episodeId);
       if (index === -1) return prev;
-      if (direction === 'up' && index === 0) return prev;
+
+      const isPlayingAtTop = currentEpisode && prev.queue.length > 0 && prev.queue[0].id === currentEpisode.id;
+      
+      if (isPlayingAtTop) {
+        if (index === 0) return prev; // Cannot move playing episode down
+        if (direction === 'up' && index === 1) return prev; // Cannot move something to position 0
+      } else {
+        if (direction === 'up' && index === 0) return prev;
+      }
+
       if (direction === 'down' && index === prev.queue.length - 1) return prev;
 
       const newQueue = [...prev.queue];
@@ -509,7 +532,7 @@ export default function App() {
       [newQueue[index], newQueue[targetIndex]] = [newQueue[targetIndex], newQueue[index]];
       return { ...prev, queue: newQueue };
     });
-  }, [updateState]);
+  }, [updateState, currentEpisode]);
 
   useEffect(() => {
     const nextToDownload = state.queue.find(e => 
