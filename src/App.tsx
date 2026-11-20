@@ -3,7 +3,7 @@ import { useGoogleLogin } from '@react-oauth/google';
 import { searchStateFile, createStateFile } from './services/driveService';
 import { useFileSystem } from './hooks/useFileSystem';
 import { usePodcastPlayer } from './hooks/usePodcastPlayer';
-import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
+import { fetchPodcastFeed, PrivateFeedError, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { saveDownload, getAllDownloadedEpisodes, deleteDownload } from './services/storageService';
 import type { Podcast, Episode, SortOrder, AppState } from './types';
 import { Loader2, FolderOpen, Plus, Cloud } from 'lucide-react';
@@ -250,7 +250,7 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
     setError(null);
     setIsAddingByUrl(true);
     try {
-      const { podcast } = await fetchPodcastFeed(urlInput);
+      const { podcast, episodes } = await fetchPodcastFeed(urlInput.trim());
       let alreadySubscribed = false;
       await updateState(prev => {
         if (prev.subscriptions.some(s => s.feedUrl === podcast.feedUrl)) {
@@ -267,10 +267,10 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
       }
 
       setUrlInput('');
-      selectPodcast(podcast);
+      selectPodcast(podcast, episodes);
     } catch (err) {
       console.error(err);
-      setError('Failed to fetch podcast from URL. Ensure it is a valid RSS feed.');
+      setError(err instanceof PrivateFeedError ? err.message : 'Failed to fetch podcast from URL. Ensure it is a valid RSS feed.');
     } finally {
       setIsAddingByUrl(false);
     }
@@ -317,7 +317,7 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
     });
   }, []);
 
-  const selectPodcast = async (podcast: Podcast) => {
+  const selectPodcast = async (podcast: Podcast, loadedEpisodes?: Episode[]) => {
     setViewMode('search');
     setSelectedPodcast(podcast);
     setSelectedEpisode(null);
@@ -328,7 +328,7 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
     setIsLoadingEpisodes(true);
 
     try {
-      const { episodes: fetchedEpisodes } = await fetchPodcastFeed(podcast.feedUrl);
+      const fetchedEpisodes = loadedEpisodes ?? (await fetchPodcastFeed(podcast.feedUrl)).episodes;
       if (activeFeedRef.current !== podcast.feedUrl) return;
 
       const order = state.podcastSortOrders[podcast.feedUrl] || 'newest';
@@ -367,7 +367,7 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
     } catch (e) {
       if (activeFeedRef.current === podcast.feedUrl) {
         console.error(e);
-        setError('Could not load episodes from this feed. Check the feed URL or try again later.');
+        setError(e instanceof PrivateFeedError ? e.message : 'Could not load episodes from this feed. Check the feed URL or try again later.');
         setIsLoadingEpisodes(false);
       }
     }
@@ -571,7 +571,7 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
 
     for (let i = 0; i < feedUrls.length; i++) {
       const url = feedUrls[i];
-      setImportingStatus(`Importing ${i + 1}/${feedUrls.length}: ${url}`);
+      setImportingStatus(`Importing ${i + 1}/${feedUrls.length}`);
       try {
         const { podcast } = await fetchPodcastFeed(url);
         let wasAdded = false;
@@ -582,7 +582,7 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
         });
         if (wasAdded) updatedCount++;
       } catch (err) {
-        console.error(`Failed to import feed from ${url}:`, err);
+        console.error('Failed to import podcast feed:', err);
         failCount++;
       }
     }

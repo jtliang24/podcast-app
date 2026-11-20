@@ -55,6 +55,13 @@ The app tries podcast feeds directly, then uses a CORS proxy if needed. Set
 `VITE_CORSPROXY_KEY` in `.env` to enable CorsProxy before the public AllOrigins
 fallback. Use a browser key restricted to your app's domains.
 
+For a private Substack podcast, paste the RSS link from **Manage subscription →
+Private podcast feed → Set up podcast**. If the browser cannot read the feed
+directly, `npm run dev`, `npm run preview`, and `npm run start-app` can fetch
+it through the app's own server. Private Substack feeds skip public proxies.
+Serving only the static `dist/` files requires a separate implementation of
+`POST /api/substack-feed` for this fallback.
+
 Run the development server with HTTPS enabled:
 ```bash
 npm run dev

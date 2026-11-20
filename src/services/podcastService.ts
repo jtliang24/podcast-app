@@ -1,5 +1,6 @@
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 import type { Podcast, Episode } from '../types';
+import { isPrivateSubstackFeed, isSubstackHost, substackFeedEndpoint, substackFeedHeader } from './substackFeed.ts';
 
 const FEED_REQUEST_TIMEOUT_MS = 10_000;
 
@@ -11,16 +12,25 @@ const xmlParser = new XMLParser({
   trimValues: true,
 });
 
-export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podcast, episodes: Episode[] }> {
-  const url = new URL(feedUrl);
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new Error('Podcast feeds must use HTTP or HTTPS');
+export class PrivateFeedError extends Error {}
+
+function feedSources(url: URL): { name: string, url: string, request?: RequestInit }[] {
+  if (isSubstackHost(url) && /^\/account\/add-podcast\/?$/.test(url.pathname)) {
+    throw new PrivateFeedError('Open the Substack setup page, copy the private RSS feed URL, and paste it here.');
+  }
+  // Try the publisher directly before sending the feed URL to a CORS proxy.
+  const sources = [{ name: 'Publisher', url: url.href }];
+  if (isPrivateSubstackFeed(url)) {
+    if (url.protocol !== 'https:') throw new PrivateFeedError('Use the HTTPS link from Substack’s private podcast feed settings.');
+    return [...sources, {
+      name: 'Substack relay',
+      url: substackFeedEndpoint,
+      request: { method: 'POST', redirect: 'error', headers: { [substackFeedHeader]: url.href } },
+    }];
   }
 
   const encodedUrl = encodeURIComponent(url.href);
-  const proxyKey = import.meta.env.VITE_CORSPROXY_KEY?.trim();
-  // Try the publisher directly before sending the feed URL to a CORS proxy.
-  const sources = [{ name: 'Publisher', url: url.href }];
+  const proxyKey = import.meta.env?.VITE_CORSPROXY_KEY?.trim();
   if (proxyKey) {
     sources.push({
       name: 'CorsProxy',
@@ -28,16 +38,29 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
     });
   }
   sources.push({ name: 'AllOrigins', url: `https://api.allorigins.win/raw?url=${encodedUrl}` });
+  return sources;
+}
+
+export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podcast, episodes: Episode[] }> {
+  const url = new URL(feedUrl);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('Podcast feeds must use HTTP or HTTPS');
+  }
 
   const errors: Error[] = [];
-  for (const source of sources) {
+  for (const source of feedSources(url)) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FEED_REQUEST_TIMEOUT_MS);
+    const relay = source.url === substackFeedEndpoint;
+    const timeout = setTimeout(() => controller.abort(), relay ? 30_000 : FEED_REQUEST_TIMEOUT_MS);
     try {
       const response = await fetch(source.url, {
+        ...source.request,
         credentials: 'omit',
         signal: controller.signal,
       });
+      if (relay && [401, 403, 410].includes(response.status)) {
+        throw new PrivateFeedError('Substack denied access. Copy your current private podcast feed URL from your subscription settings and try again.');
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       
       const xmlText = await response.text();
@@ -87,6 +110,8 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
 
       return { podcast, episodes };
     } catch (err) {
+      if (err instanceof PrivateFeedError) throw err;
+      if (relay) throw new PrivateFeedError('Could not load the private Substack feed. Check your private RSS link and that the app’s feed relay is available.');
       errors.push(new Error(
         `${source.name}: ${controller.signal.aborted ? 'Request timed out' : err instanceof Error ? err.message : 'Request failed'}`,
       ));

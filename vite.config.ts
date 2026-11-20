@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import mkcert from 'vite-plugin-mkcert'
+import { substackFeedPlugin } from './server/substackFeed'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -10,6 +11,7 @@ export default defineConfig({
     allowedHosts: true,
   },
   plugins: [
+    substackFeedPlugin,
     react(),
     mkcert({
       hosts: ['localhost', '127.0.0.1', '192.168.1.153', '192.168.1.153.sslip.io'],
