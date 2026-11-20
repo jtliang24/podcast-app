@@ -7,6 +7,8 @@ const PROXIES = [
   'https://api.allorigins.win/raw?url=',
 ];
 
+const FEED_REQUEST_TIMEOUT_MS = 10_000;
+
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
@@ -19,57 +21,86 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
   let lastError: unknown;
 
   for (const proxy of PROXIES) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FEED_REQUEST_TIMEOUT_MS);
     try {
-      const response = await fetch(`${proxy}${encodeURIComponent(feedUrl)}`);
+      const response = await fetch(`${proxy}${encodeURIComponent(feedUrl)}`, {
+        signal: controller.signal,
+      });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       
       const xmlText = await response.text();
       const result = xmlParser.parse(xmlText);
       const channel = result.rss?.channel;
 
-      if (!channel) throw new Error('Invalid RSS feed');
+      if (!isXmlRecord(channel)) {
+        throw new Error('Invalid RSS feed');
+      }
 
       const podcast: Podcast = {
         id: feedUrl,
-        title: String(channel.title || 'Unknown Title'),
-        author: String(channel['itunes:author'] || channel.author || 'Unknown Author'),
+        title: readXmlText(channel.title) || 'Unknown Title',
+        author: readXmlText(channel['itunes:author']) || readXmlText(channel.author) || 'Unknown Author',
         feedUrl: feedUrl,
-        artworkUrl: String(channel['itunes:image']?.['@_href'] || channel.image?.url || ''),
-        description: String(channel.description || ''),
+        artworkUrl: readXmlText(isXmlRecord(channel['itunes:image']) ? channel['itunes:image']['@_href'] : undefined)
+          || readXmlText(isXmlRecord(channel.image) ? channel.image.url : undefined),
+        description: readXmlText(channel.description),
       };
 
-      const items = Array.isArray(channel.item) ? channel.item : [channel.item].filter(Boolean);
+      const items: unknown[] = Array.isArray(channel.item) ? channel.item : [channel.item];
+      const episodes: Episode[] = [];
+      for (const [index, item] of items.entries()) {
+        if (!isXmlRecord(item)) continue;
 
-      const episodes: Episode[] = items.map((item: { guid?: { '#text'?: string } | string, link?: string, enclosure?: { '@_url'?: string }, title?: string, pubDate?: string, description?: string, 'content:encoded'?: string, 'itunes:duration'?: string | number, 'itunes:keywords'?: string }) => ({
-        id: String(item.guid instanceof Object ? item.guid['#text'] : item.guid || item.link || item.enclosure?.['@_url'] || Math.random()),
-        podcastId: feedUrl,
-        title: String(item.title || 'Untitled Episode'),
-        pubDate: String(item.pubDate || ''),
-        audioUrl: String(item.enclosure?.['@_url'] || ''),
-        duration: parseDuration(item['itunes:duration'] || '0'),
-        description: String(item.description || item['content:encoded'] || ''),
-        keywords: item['itunes:keywords'] ? item['itunes:keywords'].split(',').map(k => k.trim()) : [],
-      }));
+        const enclosures = Array.isArray(item.enclosure) ? item.enclosure : [item.enclosure];
+        const enclosure = enclosures.find(value => isXmlRecord(value) && readXmlText(value['@_url']));
+        const audioUrl = isXmlRecord(enclosure) ? readXmlText(enclosure['@_url']) : '';
+        const title = readXmlText(item.title) || 'Untitled Episode';
+        const pubDate = readXmlText(item.pubDate);
+        const keywordNodes = Array.isArray(item['itunes:keywords'])
+          ? item['itunes:keywords']
+          : [item['itunes:keywords']];
+
+        episodes.push({
+          id: readXmlText(item.guid) || readXmlText(item.link) || audioUrl || JSON.stringify([feedUrl, title, pubDate, index]),
+          podcastId: feedUrl,
+          title,
+          pubDate,
+          audioUrl,
+          duration: parseDuration(readXmlText(item['itunes:duration'])),
+          description: readXmlText(item.description) || readXmlText(item['content:encoded']),
+          keywords: keywordNodes.flatMap(node => readXmlText(node).split(','))
+            .map(keyword => keyword.trim()).filter(Boolean),
+        });
+      }
 
       return { podcast, episodes };
     } catch (err) {
       console.warn(`Proxy ${proxy} failed:`, err);
       lastError = err;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
   throw lastError || new Error('All proxies failed');
 }
 
-function parseDuration(duration: string | number | undefined): number {
-  if (duration === undefined) return 0;
-  const d = String(duration);
-  if (d.includes(':')) {
-    const parts = d.split(':').map(Number);
-    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-    if (parts.length === 2) return parts[0] * 60 + parts[1];
-  }
-  return parseInt(d, 10) || 0;
+function isXmlRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readXmlText(value: unknown): string {
+  const text = isXmlRecord(value) ? value['#text'] : value;
+  return typeof text === 'string' ? text : '';
+}
+
+function parseDuration(duration: string): number {
+  const parts = duration.trim().split(':');
+  if (parts.length > 3 || parts.some(part => !/^\d+(\.\d+)?$/.test(part.trim()))) return 0;
+
+  const seconds = parts.reduce((total, part) => total * 60 + Number(part), 0);
+  return Number.isFinite(seconds) ? (parts.length === 1 ? Math.trunc(seconds) : seconds) : 0;
 }
 
 export async function searchPodcasts(query: string): Promise<Podcast[]> {
