@@ -26,7 +26,7 @@ A modern, local-first podcast listening application designed for privacy, portab
 ### Prerequisites
 
 - Node.js (Latest LTS recommended)
-- [Nix](https://nixos.org/) (Optional, for a consistent development environment)
+- [Nix](https://nixos.org/) with Flakes enabled (Optional, for a reproducible development environment)
 
 ### Installation
 
@@ -36,12 +36,17 @@ A modern, local-first podcast listening application designed for privacy, portab
    cd podcast-player
    ```
 
-2. Install dependencies:
+2. (Optional) If using Nix, enter the development environment:
+   ```bash
+   nix develop
+   ```
+
+3. Install dependencies:
    ```bash
    npm install
    ```
 
-3. Set up environment variables:
+4. Set up environment variables:
    Copy `.env.example` to `.env` and add your Google Drive API credentials if you want to enable Cloud Sync.
 
 ### Development

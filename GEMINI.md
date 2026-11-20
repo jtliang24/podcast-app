@@ -11,7 +11,7 @@ A portable, local-first podcast listening application built with **React**, **Ty
 - **APIs:** Media Session API (System audio controls), iTunes Search API, Google Drive API
 - **Data Parsing:** `fast-xml-parser` (for RSS feeds and OPML files)
 - **Icons:** Lucide React
-- **Environment:** Nix (via `shell.nix`)
+- **Environment:** Nix (via `flake.nix`)
 
 ## Architecture
 The application follows a "local-first" architecture with a hybrid storage model:
@@ -60,7 +60,7 @@ The application follows a "local-first" architecture with a hybrid storage model
 The project uses **Nix** for a consistent development environment.
 1.  Enter the shell:
     ```bash
-    nix-shell
+    nix develop
     ```
 2.  Create a `.env` file based on `.env.example` and add your API keys.
 
