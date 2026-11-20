@@ -1,0 +1,132 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { setTimeout as delay } from 'node:timers/promises';
+import { newProfile, recordEdit, applyBatch, seedProfile } from '../src/services/profileChanges.ts';
+import { DriveSync, resumePoint } from '../src/services/driveSync.ts';
+import { searchStateFile } from '../src/services/driveService.ts';
+
+const ep = { id: 'episode', audioUrl: 'audio', podcastId: 'feed', title: 'An episode' };
+const show = { feedUrl: 'feed', title: 'A podcast' };
+const position = time => state => ({
+  ...state, lastPlayingEpisode: ep,
+  playbackProgress: { ...state.playbackProgress, audio: { episodeUrl: 'audio', currentTime: time, duration: 100, lastUpdated: time } },
+});
+
+test('concurrent devices converge after rewinds, retries, removals and same-time edits', () => {
+  const baseline = { subscriptions: [show], hidePlayedEpisodes: { old: true } };
+  const phone = newProfile(baseline);
+  const desktop = newProfile(baseline);
+  recordEdit(phone, position(90), 'phone', false, 10);
+  recordEdit(phone, position(12), 'phone', true, 20);
+  recordEdit(desktop, s => ({ ...s, subscriptions: [{ feedUrl: 'other' }], hidePlayedEpisodes: { desktop: true } }), 'desktop', false, 10);
+  recordEdit(phone, s => ({ ...s, hidePlayedEpisodes: { ...s.hidePlayedEpisodes, phone: true } }), 'phone', false, 30);
+  recordEdit(desktop, s => ({ ...s, podcastSortOrders: { feed: 'newest' } }), 'desktop', false, 45);
+  recordEdit(phone, s => ({ ...s, podcastSortOrders: { feed: 'oldest' } }), 'phone', false, 45);
+  const batches = [...phone.pending, ...desktop.pending].map(p => JSON.parse(JSON.stringify(p.batch)));
+  for (const batch of batches.toReversed()) applyBatch(phone, batch);
+  for (const batch of [...batches, ...batches]) applyBatch(desktop, batch);
+  assert.deepEqual(phone.state, desktop.state);
+  assert.equal(resumePoint(phone.state).time, 12);
+  assert.deepEqual(phone.state.subscriptions, [{ feedUrl: 'other' }]);
+  assert.deepEqual(phone.state.hidePlayedEpisodes, { desktop: true, phone: true });
+  assert.equal(phone.state.podcastSortOrders.feed, 'oldest');
+});
+
+test('an initial offline edit overlays the legacy snapshot once', () => {
+  const offline = newProfile();
+  recordEdit(offline, position(30), 'phone');
+  const seeded = seedProfile(offline, { ...position(2)(newProfile().state), subscriptions: [show] });
+  assert.equal(resumePoint(seeded.state).time, 30);
+  assert.deepEqual(seeded.state.subscriptions, [show]);
+  assert.equal(seedProfile(seeded, {}).pending.length, 1);
+});
+
+// A transaction commits a structured clone, like IndexedDB. Each device has its own store.
+function deviceStore() {
+  const profiles = new Map();
+  return async (id, edit) => {
+    const p = structuredClone(profiles.get(id) ?? newProfile());
+    const next = edit?.(p) ?? p;
+    if (edit) profiles.set(id, structuredClone(next));
+    return next;
+  };
+}
+
+test('offline restart, expired access, lost upload acknowledgement and foreground handoff', async t => {
+  let online = false;
+  Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => online });
+  t.after(() => delete navigator.onLine);
+  const uploads = new Map();
+  let writes = 0;
+  let lostAck = true;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const u = new URL(url);
+    assert.ok(online);
+    if (options.headers.Authorization === 'Bearer expired') return new Response(null, { status: 401 });
+    if (u.pathname.endsWith('/generateIds')) return Response.json({ ids: [crypto.randomUUID()] });
+    if (options.method === 'POST') {
+      const parts = options.body.split('\r\n');
+      const meta = JSON.parse(parts[3]);
+      const batch = JSON.parse(parts[7]);
+      assert.equal(meta.appProperties.profile, 'library');
+      writes++;
+      if (uploads.has(meta.id)) return new Response(null, { status: 409 });
+      uploads.set(meta.id, { meta, batch });
+      if (lostAck) { lostAck = false; throw new Error('response lost'); }
+      return Response.json({ id: meta.id });
+    }
+    if (u.searchParams.get('alt') === 'media') {
+      const id = u.pathname.split('/').at(-1);
+      return Response.json(id === 'library' ? { subscriptions: [show] } : uploads.get(id).batch);
+    }
+    if (u.searchParams.get('q').includes("name = 'podcast_state.json'")) {
+      if (!u.searchParams.has('pageToken')) return Response.json({ files: [{ id: 'other' }], nextPageToken: 'next' });
+      return Response.json({ files: [{ id: 'library' }] });
+    }
+    return Response.json({ files: [...uploads.values()].map(({ meta }) => meta) });
+  });
+  function session(store, token, device) {
+    const events = {};
+    const listeners = Object.fromEntries(['status', 'state', 'expired', 'remote'].map(k => [k, v => { events[k] = v; }]));
+    const engine = new DriveSync('library', token, device, listeners, store);
+    t.after(() => engine.stop());
+    return { engine, events };
+  }
+  async function until(check) {
+    for (let i = 0; i < 100 && !check(); i++) await delay(5);
+    assert.ok(check());
+  }
+
+  const phone = deviceStore();
+  const desktop = session(deviceStore(), 'valid', 'desktop');
+  online = true;
+  await desktop.engine.restore();
+  await until(() => desktop.events.status === 'Synced');
+  assert.equal(await searchStateFile('valid', 'missing-profile'), null);
+  assert.equal(await searchStateFile('valid', 'library'), 'library');
+  const first = session(phone, 'expired', 'phone');
+  online = false;
+  await first.engine.restore();
+  await first.engine.edit(position(42.75), true);
+  assert.equal(first.events.status, 'Saved on this device');
+  first.engine.stop();
+  const reopened = session(phone, 'expired', 'phone');
+  await reopened.engine.restore();
+  assert.equal(resumePoint(reopened.events.state).time, 42.75);
+  online = true;
+  reopened.engine.refresh();
+  await until(() => reopened.events.status === 'Reconnect Google Drive');
+  assert.equal((await phone('library')).pending.length, 1);
+  reopened.engine.stop();
+  const signedIn = session(phone, 'valid', 'phone');
+  await signedIn.engine.restore();
+  await until(() => writes === 1 && signedIn.events.status === 'Saved on this device');
+  signedIn.engine.refresh();
+  await until(() => signedIn.events.status === 'Synced');
+  assert.equal(writes, 2);
+  assert.equal(uploads.size, 1);
+  assert.equal((await phone('library')).pending.length, 0);
+  desktop.engine.refresh();
+  await until(() => desktop.events.remote?.time === 42.75);
+  assert.deepEqual(desktop.events.state.subscriptions, [show]);
+});

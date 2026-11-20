@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start-app": "npm run build && vite preview --open"
+    "start-app": "npm run build && vite preview --open",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@react-oauth/google": "^0.13.4",

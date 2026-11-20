@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
-import { searchStateFile, downloadStateFile, createStateFile } from './services/driveService';
+import { searchStateFile, createStateFile } from './services/driveService';
 import { useFileSystem } from './hooks/useFileSystem';
 import { usePodcastPlayer } from './hooks/usePodcastPlayer';
 import { fetchPodcastFeed, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
@@ -31,42 +31,35 @@ export default function App() {
     updateState,
     exportState,
     importState,
-    setStorageMode,
-    driveAccessToken,
-    setDriveAccessToken,
-    setDriveFileId,
-    setState,
-    setIsLoading
+    connectDrive,
+    driveFileId,
+    syncStatus,
+    storageError,
+    refreshDrive
   } = useFileSystem();
 
-  const [isDriveSetup, setIsDriveSetup] = useState(false);
+  const [setupToken, setSetupToken] = useState<string | null>(null);
   const [driveLoadingMessage, setDriveLoadingMessage] = useState<string | null>(null);
 
   const loginWithGoogle = useGoogleLogin({
     scope: 'https://www.googleapis.com/auth/drive.appdata',
     onSuccess: async (tokenResponse) => {
-      setIsLoading(true);
       setDriveLoadingMessage('Searching for state file...');
       try {
-        const fileId = await searchStateFile(tokenResponse.access_token);
+        const expected = storageMode === 'google-drive' ? driveFileId : null;
+        const fileId = await searchStateFile(tokenResponse.access_token, expected);
         if (fileId) {
-          setDriveLoadingMessage('Downloading state file...');
-          const content = await downloadStateFile(tokenResponse.access_token, fileId);
-          const parsed = JSON.parse(content) as AppState;
-          setState({ ...INITIAL_STATE, ...parsed });
-          setDriveFileId(fileId);
-          setDriveAccessToken(tokenResponse.access_token);
-          setStorageMode('google-drive');
+          await connectDrive(tokenResponse.access_token, fileId);
+        } else if (expected) {
+          alert('Reconnect with the Google account that owns this library.');
         } else {
           // File not found, enter setup phase
-          setDriveAccessToken(tokenResponse.access_token);
-          setIsDriveSetup(true);
+          setSetupToken(tokenResponse.access_token);
         }
       } catch (err) {
         console.error('Drive Error:', err);
         alert('Failed to connect to Google Drive.');
       } finally {
-        setIsLoading(false);
         setDriveLoadingMessage(null);
       }
     },
@@ -76,43 +69,35 @@ export default function App() {
   });
 
   const handleCreateDriveProfile = async () => {
-    if (!driveAccessToken) return;
-    setIsLoading(true);
+    if (!setupToken) return;
     setDriveLoadingMessage('Creating new profile in Drive...');
     try {
-      const fileId = await createStateFile(driveAccessToken, JSON.stringify(INITIAL_STATE, null, 2));
-      setState(INITIAL_STATE);
-      setDriveFileId(fileId);
-      setStorageMode('google-drive');
-      setIsDriveSetup(false);
+      const fileId = await createStateFile(setupToken, JSON.stringify(INITIAL_STATE, null, 2));
+      await connectDrive(setupToken, fileId, INITIAL_STATE);
+      setSetupToken(null);
     } catch (err) {
       console.error('Error creating profile:', err);
       alert('Failed to create profile.');
     } finally {
-      setIsLoading(false);
       setDriveLoadingMessage(null);
     }
   };
 
   const handleUploadLocalStateToDrive = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && driveAccessToken) {
-      setIsLoading(true);
+    if (file && setupToken) {
       setDriveLoadingMessage('Uploading state file to Drive...');
       try {
         const text = await file.text();
         const parsed = JSON.parse(text) as AppState;
         const newState = { ...INITIAL_STATE, ...parsed };
-        const fileId = await createStateFile(driveAccessToken, JSON.stringify(newState, null, 2));
-        setState(newState);
-        setDriveFileId(fileId);
-        setStorageMode('google-drive');
-        setIsDriveSetup(false);
+        const fileId = await createStateFile(setupToken, JSON.stringify(newState, null, 2));
+        await connectDrive(setupToken, fileId, newState);
+        setSetupToken(null);
       } catch (err) {
         console.error('Error uploading to drive:', err);
         alert('Failed to upload file.');
       } finally {
-        setIsLoading(false);
         setDriveLoadingMessage(null);
       }
       e.target.value = '';
@@ -601,7 +586,7 @@ export default function App() {
     }
   };
 
-  if (isLoading) {
+  if (isLoading || (driveLoadingMessage && storageMode !== 'google-drive')) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
         <Loader2 className="animate-spin text-blue-500 mb-4" size={48} />
@@ -610,7 +595,7 @@ export default function App() {
     );
   }
 
-  if (isDriveSetup) {
+  if (setupToken) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white text-center">
         <h1 className="text-4xl font-black mb-6 bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
@@ -672,6 +657,23 @@ export default function App() {
       />
 
       <main className="flex-1 flex flex-col pb-32 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-end gap-3 px-6 pt-3 text-sm">
+          {storageMode === 'google-drive' ? (
+            <>
+              {syncStatus === 'Reconnect Google Drive' ? (
+                <button className="text-blue-300" onClick={() => loginWithGoogle()}>Reconnect Google Drive</button>
+              ) : (
+                <>
+                  <span role="status" className="text-slate-400">{syncStatus}</span>
+                  <button className="text-blue-300" onClick={refreshDrive}>Refresh sync</button>
+                </>
+              )}
+            </>
+          ) : (
+            <button className="text-blue-300" onClick={() => loginWithGoogle()}>Connect Google Drive</button>
+          )}
+          {storageError && <span role="alert" className="text-red-300">{storageError}</span>}
+        </div>
         <Header 
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}

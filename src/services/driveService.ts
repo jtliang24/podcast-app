@@ -1,72 +1,84 @@
-export const DRIVE_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
+import type { Batch } from './profileChanges.ts';
 
-export async function searchStateFile(accessToken: string) {
-  const query = encodeURIComponent("name = 'podcast_state.json' and 'appDataFolder' in parents and trashed = false");
-  const response = await fetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${query}&fields=files(id, name)`, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-  
-  if (!response.ok) {
-    throw new Error('Failed to search Drive');
+const filesUrl = 'https://www.googleapis.com/drive/v3/files';
+const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+
+export class DriveError extends Error {
+  status: number;
+  constructor(status: number) {
+    super(`Drive request failed (HTTP ${status})`);
+    this.status = status;
   }
-  
-  const data = await response.json();
-  return data.files && data.files.length > 0 ? data.files[0].id : null;
 }
 
-export async function downloadStateFile(accessToken: string, fileId: string) {
-  const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
+async function driveFetch(accessToken: string, url: string, options: RequestInit = {}) {
+  const response = await fetch(url, {
+    ...options, headers: { Authorization: `Bearer ${accessToken}`, ...options.headers },
+    cache: 'no-store',
   });
-  
-  if (!response.ok) {
-    throw new Error('Failed to download from Drive');
-  }
-  
-  return await response.text();
+  if (!response.ok) throw new DriveError(response.status);
+  return response;
 }
 
-export async function createStateFile(accessToken: string, fileContent: string) {
-  const metadata = {
-    name: 'podcast_state.json',
-    parents: ['appDataFolder'],
-  };
-  
-  const form = new FormData();
-  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', new Blob([fileContent], { type: 'application/json' }));
-  
-  const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: form,
-  });
-  
-  if (!response.ok) {
-    throw new Error('Failed to create file in Drive');
-  }
-  
-  const data = await response.json();
-  return data.id;
+interface DriveFile { id: string; name: string }
+
+async function listFiles(token: string, query: string) {
+  const files: DriveFile[] = [];
+  let pageToken = '';
+  do {
+    const params = new URLSearchParams({
+      spaces: 'appDataFolder', q: `trashed = false and ${query}`,
+      fields: 'nextPageToken,files(id,name)', pageSize: '1000', orderBy: 'createdTime',
+    });
+    if (pageToken) params.set('pageToken', pageToken);
+    const response = await driveFetch(token, `${filesUrl}?${params}`);
+    const page = await response.json();
+    files.push(...page.files);
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  return files;
 }
 
-export async function updateStateFile(accessToken: string, fileId: string, fileContent: string) {
-  const response = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: fileContent,
+export async function searchStateFile(token: string, expected?: string | null) {
+  const files = await listFiles(token, "name = 'podcast_state.json'");
+  return (expected ? files.find(file => file.id === expected) : files[0])?.id ?? null;
+}
+
+export async function downloadStateFile(token: string, fileId: string) {
+  const response = await driveFetch(token, `${filesUrl}/${encodeURIComponent(fileId)}?alt=media`);
+  return response.text();
+}
+
+async function createFile(token: string, metadata: object, content: string): Promise<string> {
+  const boundary = crypto.randomUUID();
+  const part = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`;
+  const body = part + JSON.stringify({ ...metadata, parents: ['appDataFolder'], mimeType: 'application/json' })
+    + '\r\n' + part + content + `\r\n--${boundary}--\r\n`;
+  const response = await driveFetch(token, uploadUrl, {
+    method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
   });
-  
-  if (!response.ok) {
-    throw new Error('Failed to update file in Drive');
+  return (await response.json()).id;
+}
+
+export function createStateFile(token: string, content: string) {
+  return createFile(token, { name: 'podcast_state.json' }, content);
+}
+
+export async function allocateFileId(token: string): Promise<string> {
+  const response = await driveFetch(token, `${filesUrl}/generateIds?count=1&space=appDataFolder`);
+  return (await response.json()).ids[0];
+}
+
+export async function listBatches(token: string, profileId: string) {
+  const escapedId = profileId.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+  return listFiles(token, `appProperties has { key='profile' and value='${escapedId}' }`);
+}
+
+export async function uploadBatch(token: string, profileId: string, fileId: string, batch: Batch) {
+  try {
+    await createFile(token, { id: fileId, name: batch.id, appProperties: { profile: profileId } }, JSON.stringify(batch));
+  } catch (error) {
+    // Drive returns 409 when a previous create with this reserved ID succeeded.
+    if (!(error instanceof DriveError && error.status === 409)) throw error;
   }
 }

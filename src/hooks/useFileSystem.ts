@@ -1,6 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { AppState } from '../types';
 import { INITIAL_STATE } from '../types';
+import { DriveSync } from '../services/driveSync';
+import type { ResumePoint, SyncStatus } from '../services/driveSync';
+import { accessProfile } from '../services/profileStore';
+import { seedProfile } from '../services/profileChanges';
+import type { StateUpdate } from '../services/profileChanges';
 
 type StorageMode = 'file-system-access' | 'opfs' | 'google-drive';
 
@@ -42,63 +47,142 @@ async function getHandleFromIDB(): Promise<FileSystemFileHandle | undefined> {
   });
 }
 
+const saveToOPFS = async (newState: AppState) => {
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fileHandle = await root.getFileHandle('podcast_state.json', { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(newState, null, 2));
+    await writable.close();
+  } catch (err) {
+    console.error('Error saving to OPFS:', err);
+  }
+};
+
+const saveState = async (handle: FileSystemFileHandle, newState: AppState) => {
+  try {
+    const writable = await handle.createWritable();
+    await writable.write(JSON.stringify(newState, null, 2));
+    await writable.close();
+  } catch (err) {
+    console.error('Error saving state:', err);
+  }
+};
+
 export function useFileSystem() {
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [state, setState] = useState<AppState>(INITIAL_STATE);
-  const [isLoading, setIsLoading] = useState(false);
-  const [storageMode, setStorageMode] = useState<StorageMode | null>(() => {
-    return (localStorage.getItem('storageMode') as StorageMode) || null;
-  });
-  const [driveAccessToken, setDriveAccessToken] = useState<string | null>(() => {
-    return localStorage.getItem('driveAccessToken') || null;
-  });
-  const [driveFileId, setDriveFileId] = useState<string | null>(() => {
-    return localStorage.getItem('driveFileId') || null;
-  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [storageMode, setStorageMode] = useState<StorageMode | null>(() => localStorage.getItem('storageMode') as StorageMode | null);
+  const [driveFileId, setDriveFileId] = useState(() => localStorage.getItem('driveFileId'));
+  const [driveToken, setDriveToken] = useState(() => localStorage.getItem('driveAccessToken'));
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('Saved on this device');
+  const [remoteSession, setRemoteSession] = useState<ResumePoint | null>(null);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const sync = useRef<DriveSync | null>(null);
 
   // Keep state in a ref to always have the latest version for functional updates and I/O
   const stateRef = useRef<AppState>(state);
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+  const publish = useCallback((next: AppState) => {
+    stateRef.current = next;
+    setState(next);
+  }, []);
 
   // Persist storage settings to localStorage
   useEffect(() => {
     if (storageMode) localStorage.setItem('storageMode', storageMode);
-    else localStorage.removeItem('storageMode');
   }, [storageMode]);
 
-  useEffect(() => {
-    if (driveAccessToken) localStorage.setItem('driveAccessToken', driveAccessToken);
-    else localStorage.removeItem('driveAccessToken');
-  }, [driveAccessToken]);
+  const connectDrive = async (token: string, id: string, initial?: AppState) => {
+    if (storageMode === 'google-drive' && driveFileId && id !== driveFileId) {
+      throw new Error('Reconnect with the Google account that owns this library.');
+    }
+    if (initial) await accessProfile(id, profile => seedProfile(profile, initial));
+    localStorage.setItem('driveFileId', id);
+    localStorage.setItem('driveAccessToken', token);
+    localStorage.setItem('storageMode', 'google-drive');
+    setDriveFileId(id);
+    setDriveToken(token);
+    setStorageMode('google-drive');
+    sync.current?.refresh();
+  };
 
+  const refreshDrive = useCallback(() => sync.current?.refresh(), []);
   useEffect(() => {
-    if (driveFileId) localStorage.setItem('driveFileId', driveFileId);
-    else localStorage.removeItem('driveFileId');
-  }, [driveFileId]);
+    if (storageMode !== 'google-drive' || !driveFileId) return;
+    let device = localStorage.getItem('driveDeviceId');
+    if (!device) {
+      device = crypto.randomUUID();
+      localStorage.setItem('driveDeviceId', device);
+    }
+    const engine = new DriveSync(driveFileId, driveToken, device, {
+      state: publish, remote: setRemoteSession, status: setSyncStatus,
+      expired: () => { localStorage.removeItem('driveAccessToken'); setDriveToken(null); },
+    });
+    sync.current = engine;
+    engine.restore().catch(() => setStorageError('Could not open the saved Drive library on this device.'))
+      .finally(() => { if (sync.current === engine) setIsLoading(false); });
+    const refresh = () => engine.refresh();
+    const foreground = () => { if (document.visibilityState === 'visible') refresh(); };
+    window.addEventListener('online', refresh);
+    window.addEventListener('offline', refresh);
+    window.addEventListener('focus', foreground);
+    document.addEventListener('visibilitychange', foreground);
+    return () => {
+      engine.stop();
+      sync.current = null;
+      window.removeEventListener('online', refresh);
+      window.removeEventListener('offline', refresh);
+      window.removeEventListener('focus', foreground);
+      document.removeEventListener('visibilitychange', foreground);
+    };
+  }, [storageMode, driveFileId, driveToken, publish]);
 
   // Check support on mount
   const isFileSystemAccessSupported = 'showOpenFilePicker' in window;
 
+  const loadFromOPFS = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const root = await navigator.storage.getDirectory();
+      const fileHandle = await root.getFileHandle('podcast_state.json', { create: true });
+      const file = await fileHandle.getFile();
+      const text = await file.text();
+      if (text) {
+        const parsed = JSON.parse(text) as Partial<AppState>;
+        const newState = { ...INITIAL_STATE, ...parsed };
+        publish(newState);
+      } else {
+        // New file, save initial state
+        await saveToOPFS(INITIAL_STATE);
+      }
+    } catch (err) {
+      console.error('Error loading from OPFS:', err);
+      publish(INITIAL_STATE);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [publish]);
+
+  const loadState = useCallback(async (handle: FileSystemFileHandle) => {
+    setIsLoading(true);
+    try {
+      const file = await handle.getFile();
+      const text = await file.text();
+      const parsed = JSON.parse(text) as Partial<AppState>;
+      publish({ ...INITIAL_STATE, ...parsed });
+    } catch (err) {
+      console.error('Error loading state:', err);
+      publish(INITIAL_STATE);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [publish]);
+
   // Initialize storage or try to load saved state
   useEffect(() => {
     const init = async () => {
-      if (storageMode === 'google-drive' && driveAccessToken && driveFileId) {
-        setIsLoading(true);
-        try {
-          const { downloadStateFile } = await import('../services/driveService');
-          const content = await downloadStateFile(driveAccessToken, driveFileId);
-          const parsed = JSON.parse(content) as Partial<AppState>;
-          setState({ ...INITIAL_STATE, ...parsed });
-        } catch (err) {
-          console.error('Error loading from Google Drive:', err);
-          // If drive fails, fallback to checking others or just stay at initial
-        } finally {
-          setIsLoading(false);
-        }
-        return;
-      }
+      if (localStorage.getItem('storageMode') === 'google-drive' && localStorage.getItem('driveFileId')) return;
 
       if (!isFileSystemAccessSupported) {
         setStorageMode('opfs');
@@ -124,48 +208,14 @@ export function useFileSystem() {
           }
         } catch (e) {
           console.error('Error verifying saved file handle:', e);
+        } finally {
+          setIsLoading(false);
         }
       }
     };
 
     init();
-  }, [isFileSystemAccessSupported]); // Run once on mount (isFileSystemAccessSupported is stable)
-
-  const loadFromOPFS = async () => {
-    setIsLoading(true);
-    try {
-      const root = await navigator.storage.getDirectory();
-      const fileHandle = await root.getFileHandle('podcast_state.json', { create: true });
-      const file = await fileHandle.getFile();
-      const text = await file.text();
-      if (text) {
-        const parsed = JSON.parse(text) as Partial<AppState>;
-        const newState = { ...INITIAL_STATE, ...parsed };
-        setState(newState);
-      } else {
-        // New file, save initial state
-        await saveToOPFS(INITIAL_STATE);
-      }
-    } catch (err) {
-      console.error('Error loading from OPFS:', err);
-      setState(INITIAL_STATE);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const saveToOPFS = async (newState: AppState) => {
-    try {
-      const root = await navigator.storage.getDirectory();
-      const fileHandle = await root.getFileHandle('podcast_state.json', { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(JSON.stringify(newState, null, 2));
-      await writable.close();
-      setState(newState);
-    } catch (err) {
-      console.error('Error saving to OPFS:', err);
-    }
-  };
+  }, [isFileSystemAccessSupported, loadFromOPFS, loadState]);
 
   const selectFile = useCallback(async () => {
     if (!isFileSystemAccessSupported) return;
@@ -186,7 +236,7 @@ export function useFileSystem() {
     } catch (err) {
       console.error('Error selecting file:', err);
     }
-  }, [isFileSystemAccessSupported]);
+  }, [isFileSystemAccessSupported, loadState]);
 
   const createNewFile = useCallback(async () => {
     if (!isFileSystemAccessSupported) return;
@@ -204,59 +254,35 @@ export function useFileSystem() {
       setStorageMode('file-system-access');
       await saveHandleToIDB(handle);
       await saveState(handle, INITIAL_STATE);
-      setState(INITIAL_STATE);
+      publish(INITIAL_STATE);
     } catch (err) {
       console.error('Error creating file:', err);
     }
-  }, [isFileSystemAccessSupported]);
+  }, [isFileSystemAccessSupported, publish]);
 
-  const loadState = async (handle: FileSystemFileHandle) => {
-    setIsLoading(true);
-    try {
-      const file = await handle.getFile();
-      const text = await file.text();
-      const parsed = JSON.parse(text) as Partial<AppState>;
-      setState({ ...INITIAL_STATE, ...parsed });
-    } catch (err) {
-      console.error('Error loading state:', err);
-      setState(INITIAL_STATE);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const saveState = async (handle: FileSystemFileHandle, newState: AppState) => {
-    try {
-      const writable = await handle.createWritable();
-      await writable.write(JSON.stringify(newState, null, 2));
-      await writable.close();
-      setState(newState);
-    } catch (err) {
-      console.error('Error saving state:', err);
-    }
-  };
-
-  const updateState = useCallback(async (update: AppState | ((prev: AppState) => AppState)) => {
-    const newState = typeof update === 'function' ? update(stateRef.current) : update;
-    
-    // Immediate state update for UI responsiveness
-    stateRef.current = newState;
-    setState(newState);
-    
-    // Persist to disk
-    if (storageMode === 'file-system-access' && fileHandle) {
-      await saveState(fileHandle, newState);
-    } else if (storageMode === 'opfs') {
-      await saveToOPFS(newState);
-    } else if (storageMode === 'google-drive' && driveAccessToken && driveFileId) {
+  const writes = useRef(Promise.resolve());
+  const updateState = useCallback(async (update: StateUpdate, urgent = false) => {
+    if (storageMode === 'google-drive') {
+      if (!sync.current) return;
       try {
-        const { updateStateFile } = await import('../services/driveService');
-        await updateStateFile(driveAccessToken, driveFileId, JSON.stringify(newState, null, 2));
-      } catch (err) {
-        console.error('Error saving to Google Drive:', err);
+        await sync.current.edit(update, urgent);
+        setStorageError(null);
+      } catch (error) {
+        setStorageError('Could not save this change on this device.');
+        console.error(error);
       }
+      return;
     }
-  }, [fileHandle, storageMode, driveAccessToken, driveFileId]);
+    const next = typeof update === 'function' ? update(stateRef.current) : update;
+    // Immediate state update for UI responsiveness
+    publish(next);
+    // Persist to disk in action order.
+    writes.current = writes.current.then(async () => {
+      if (storageMode === 'file-system-access' && fileHandle) await saveState(fileHandle, next);
+      else if (storageMode === 'opfs') await saveToOPFS(next);
+    });
+    await writes.current;
+  }, [fileHandle, storageMode, publish]);
 
   const exportState = useCallback(async () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -272,7 +298,7 @@ export function useFileSystem() {
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as AppState;
-      await updateState(() => parsed);
+      await updateState({ ...INITIAL_STATE, ...parsed });
     } catch (err) {
       console.error('Error importing state:', err);
     }
@@ -289,12 +315,11 @@ export function useFileSystem() {
     updateState,
     exportState,
     importState,
-    setStorageMode,
-    driveAccessToken,
-    setDriveAccessToken,
+    connectDrive,
     driveFileId,
-    setDriveFileId,
-    setState,
-    setIsLoading
+    syncStatus,
+    refreshDrive,
+    remoteSession,
+    storageError
   };
 }
