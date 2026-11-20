@@ -31,7 +31,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   exportState
 }) => {
   return (
-    <aside className="w-64 border-r border-slate-800 flex flex-col bg-slate-900">
+    <aside className="h-full w-full md:w-64 border-r border-slate-800 flex flex-col bg-slate-900">
       <div className="p-6 border-b border-slate-800 font-bold flex justify-between items-center">
         <span className="tracking-tight">Subscriptions</span>
         <div className="flex space-x-2 text-slate-500">

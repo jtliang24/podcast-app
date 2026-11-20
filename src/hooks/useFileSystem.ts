@@ -98,13 +98,14 @@ export function useFileSystem() {
       throw new Error('Reconnect with the Google account that owns this library.');
     }
     if (initial) await accessProfile(id, profile => seedProfile(profile, initial));
+    if (storageMode !== 'google-drive') setIsLoading(true);
     localStorage.setItem('driveFileId', id);
     localStorage.setItem('driveAccessToken', token);
     localStorage.setItem('storageMode', 'google-drive');
     setDriveFileId(id);
     setDriveToken(token);
     setStorageMode('google-drive');
-    sync.current?.refresh();
+    if (driveToken === token) sync.current?.refresh();
   };
 
   const refreshDrive = useCallback(() => sync.current?.refresh(), []);

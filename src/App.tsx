@@ -20,6 +20,12 @@ import SearchResultsView from './components/SearchResultsView';
 import EpisodeDescriptionView from './components/EpisodeDescriptionView';
 
 export default function App() {
+  const storage = useFileSystem();
+  // A storage switch starts a new player. Reconnecting the same library keeps its audio element.
+  return <Library key={storage.storageMode + (storage.driveFileId ?? '')} storage={storage} />;
+}
+
+function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
   const { 
     state, 
     fileHandle, 
@@ -35,8 +41,9 @@ export default function App() {
     driveFileId,
     syncStatus,
     storageError,
+    remoteSession,
     refreshDrive
-  } = useFileSystem();
+  } = storage;
 
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [driveLoadingMessage, setDriveLoadingMessage] = useState<string | null>(null);
@@ -121,6 +128,9 @@ export default function App() {
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [isRefreshingNewReleases, setIsRefreshingNewReleases] = useState(false);
   
+  const [downloadsReady, setDownloadsReady] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
+  const attemptedDownloads = useRef(new Set<string>());
   const [downloadedEpisodes, setDownloadedEpisodes] = useState<Episode[]>([]);
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
 
@@ -184,26 +194,26 @@ export default function App() {
     currentTime,
     duration,
     audioRef,
-    setDuration,
-    setIsPlaying,
+    offer,
+    continueListening,
+    playbackError,
+    retry,
+    audioEvents,
+    hasRemoteOffer,
     togglePlay,
     skip,
     handleSeek,
     formatTime,
-    playEpisode,
-    handleEpisodeEnded
+    playEpisode
   } = usePodcastPlayer({
     state,
-    storageMode,
-    updateState,
-    downloadedEpisodes,
-    handleDownload,
-    toggleEpisodePlayed
+    ready: !isLoading && !setupToken && (!isFileSystemAccessSupported || !!fileHandle || storageMode === 'google-drive'),
+    updateState, downloadedEpisodes, downloadsReady, remoteSession,
   });
 
   // Load downloads on mount
   useEffect(() => {
-    getAllDownloadedEpisodes().then(deps => setDownloadedEpisodes(deps)).catch(console.error);
+    getAllDownloadedEpisodes().then(setDownloadedEpisodes).catch(console.error).finally(() => setDownloadsReady(true));
   }, []);
 
   // Keyboard Shortcuts
@@ -406,7 +416,7 @@ export default function App() {
 
   // New Releases Logic
   const loadNewReleases = useCallback(async () => {
-    if (state.subscriptions.length === 0) return;
+    if (!navigator.onLine || state.subscriptions.length === 0) return;
     setIsRefreshingNewReleases(true);
     try {
       const allNewEpisodes: Episode[] = [];
@@ -519,15 +529,29 @@ export default function App() {
     });
   }, [updateState, currentEpisode]);
 
+  const [online, setOnline] = useState(navigator.onLine);
   useEffect(() => {
+    const connected = () => { attemptedDownloads.current.clear(); setOnline(true); };
+    const disconnected = () => setOnline(false);
+    window.addEventListener('online', connected);
+    window.addEventListener('offline', disconnected);
+    return () => {
+      window.removeEventListener('online', connected);
+      window.removeEventListener('offline', disconnected);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!online || !downloadsReady) return;
     const nextToDownload = state.queue.find(e => 
       !downloadedEpisodes.some(d => d.id === e.id) && 
-      !downloadingIds.has(e.id)
+      !downloadingIds.has(e.id) && !attemptedDownloads.current.has(e.id)
     );
     if (nextToDownload) {
+      attemptedDownloads.current.add(nextToDownload.id);
       handleDownload(nextToDownload);
     }
-  }, [state.queue, downloadedEpisodes, downloadingIds, handleDownload]);
+  }, [state.queue, downloadedEpisodes, downloadingIds, handleDownload, downloadsReady, online]);
 
   // OPML and State Handlers
   const handleImportOPML = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -586,7 +610,7 @@ export default function App() {
     }
   };
 
-  if (isLoading || (driveLoadingMessage && storageMode !== 'google-drive')) {
+  if (isLoading || (driveLoadingMessage && (setupToken || !storageMode))) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
         <Loader2 className="animate-spin text-blue-500 mb-4" size={48} />
@@ -643,37 +667,44 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex select-none font-sans overflow-hidden">
-      <Sidebar 
-        state={state}
-        viewMode={viewMode}
-        setViewMode={switchView}
-        selectedPodcast={selectedPodcast}
-        selectPodcast={selectPodcast}
-        handleUnsubscribe={handleUnsubscribe}
-        handleImportOPML={handleImportOPML}
-        handleExportOPML={handleExportOPML}
-        handleImportState={handleImportState}
-        exportState={exportState}
-      />
-
-      <main className="flex-1 flex flex-col pb-32 overflow-hidden">
+      <div className={showLibrary ? 'fixed inset-x-0 top-12 bottom-32 z-40 overflow-auto bg-slate-900 md:static md:block' : 'hidden md:block'}>
+        <Sidebar
+          state={state}
+          viewMode={viewMode}
+          setViewMode={mode => { switchView(mode); setShowLibrary(false); }}
+          selectedPodcast={selectedPodcast}
+          selectPodcast={podcast => { selectPodcast(podcast); setShowLibrary(false); }}
+          handleUnsubscribe={handleUnsubscribe}
+          handleImportOPML={handleImportOPML}
+          handleExportOPML={handleExportOPML}
+          handleImportState={handleImportState}
+          exportState={exportState}
+        />
+      </div>
+      <main className="min-w-0 flex-1 flex flex-col pb-44 md:pb-32 overflow-hidden">
         <div className="flex flex-wrap items-center justify-end gap-3 px-6 pt-3 text-sm">
-          {storageMode === 'google-drive' ? (
-            <>
-              {syncStatus === 'Reconnect Google Drive' ? (
-                <button className="text-blue-300" onClick={() => loginWithGoogle()}>Reconnect Google Drive</button>
-              ) : (
-                <>
-                  <span role="status" className="text-slate-400">{syncStatus}</span>
-                  <button className="text-blue-300" onClick={refreshDrive}>Refresh sync</button>
-                </>
-              )}
-            </>
+          <button className="mr-auto text-blue-300 md:hidden" aria-expanded={showLibrary} onClick={() => setShowLibrary(!showLibrary)}>Library</button>
+          {storageMode !== 'google-drive' ? (
+            <button className="text-blue-300" disabled={!!driveLoadingMessage} onClick={() => loginWithGoogle()}>{driveLoadingMessage || 'Connect Google Drive'}</button>
+          ) : syncStatus === 'Reconnect Google Drive' ? (
+            <button className="text-blue-300" onClick={() => loginWithGoogle()}>Reconnect Google Drive</button>
           ) : (
-            <button className="text-blue-300" onClick={() => loginWithGoogle()}>Connect Google Drive</button>
+            <>
+              <span role="status" className="text-slate-400">{syncStatus}</span>
+              <button className="text-blue-300" onClick={refreshDrive}>Refresh sync</button>
+            </>
           )}
           {storageError && <span role="alert" className="text-red-300">{storageError}</span>}
         </div>
+        {offer && (hasRemoteOffer || (!isPlaying && viewMode === 'search' && !selectedPodcast && !selectedEpisode && !searchResults.length)) && (
+          <section className="mx-4 mt-4 rounded-2xl border border-slate-700 bg-slate-900 p-4 md:mx-6">
+            <p className="text-sm text-slate-300">{state.subscriptions.find(p => p.feedUrl === offer.episode.podcastId)?.title || offer.episode.podcastId}</p>
+            <h2 className="mb-3 font-bold">{offer.episode.title}</h2>
+            <button className="rounded-lg bg-blue-600 px-4 py-2 font-semibold" onClick={continueListening}>
+              Continue listening <span className="ml-2 font-mono">{formatTime(offer.time)}</span>
+            </button>
+          </section>
+        )}
         <Header 
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
@@ -761,7 +792,7 @@ export default function App() {
               handleSortChange={handleSortChange}
               loadMoreEpisodes={loadMoreEpisodes}
             />
-          ) : (
+          ) : !offer && (
             <div className="h-full flex flex-col items-center justify-center text-slate-500">
                <Loader2 size={64} className="mb-4 opacity-5" />
                <p className="text-lg font-bold opacity-20 text-center">Find something to listen to</p>
@@ -782,15 +813,15 @@ export default function App() {
         skip={skip}
         handleSeek={handleSeek}
         formatTime={formatTime}
+        playbackError={playbackError}
+        retry={retry}
         reorderQueue={reorderQueue}
         removeFromQueue={removeFromQueue}
       />
       <audio 
         ref={audioRef} 
-        onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
-        onPlay={() => setIsPlaying(true)} 
-        onPause={() => setIsPlaying(false)} 
-        onEnded={handleEpisodeEnded}
+        preload="metadata"
+        {...audioEvents}
         className="hidden" 
       />
     </div>

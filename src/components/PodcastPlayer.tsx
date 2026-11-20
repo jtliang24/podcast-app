@@ -17,6 +17,8 @@ interface PodcastPlayerProps {
   skip: (seconds: number) => void;
   handleSeek: (e: React.ChangeEvent<HTMLInputElement>) => void;
   formatTime: (time: number) => string;
+  playbackError: boolean;
+  retry: () => void;
   reorderQueue: (id: string, direction: 'up' | 'down') => void;
   removeFromQueue: (id: string) => void;
 }
@@ -33,15 +35,22 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
   skip,
   handleSeek,
   formatTime,
+  playbackError,
+  retry,
   reorderQueue,
   removeFromQueue
 }) => {
   const [isQueueOpen, setIsQueueOpen] = useState(false);
 
   return (
-    <footer className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-6 z-50">
+    <footer className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-3 md:p-6 z-50">
+      {playbackError && (
+        <div role="alert" className="mb-2 text-center text-sm text-red-300">
+          Couldn’t play this episode. <button className="ml-2 font-bold underline" onClick={retry}>Retry playback</button>
+        </div>
+      )}
       {isQueueOpen && (
-        <div className="absolute bottom-full right-6 mb-4 w-96 max-h-[70vh] bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl z-50 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
+        <div className="absolute bottom-full right-2 mb-4 w-[min(24rem,95vw)] max-h-[70vh] bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl z-50 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
           <div className="p-6 border-b border-slate-800 flex items-center justify-between bg-slate-800/50">
             <div className="flex items-center space-x-2">
               <List size={20} className="text-blue-500" />
@@ -101,10 +110,10 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
         </div>
       )}
       <div className="max-w-screen-2xl mx-auto flex flex-col items-center">
-        <div className="w-full flex items-center justify-between mb-2">
-          <div className="flex items-center space-x-4 w-1/3 min-w-0">
-            {currentEpisode || playingPodcast ? (
-              <img src={playingPodcast?.artworkUrl || currentEpisode?.audioUrl} className="w-12 h-12 rounded shadow-lg bg-slate-800" alt="" />
+        <div className="w-full flex flex-wrap items-center justify-between gap-y-2 mb-2">
+          <div className="flex items-center space-x-3 w-full md:w-1/3 min-w-0">
+            {playingPodcast?.artworkUrl ? (
+              <img src={playingPodcast.artworkUrl} className="w-12 h-12 rounded shadow-lg bg-slate-800" alt="" />
             ) : (
               <div className="w-12 h-12 rounded shadow-lg bg-slate-800 flex items-center justify-center text-slate-600">
                 <PodcastIcon size={24} />
@@ -116,7 +125,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center justify-center space-x-10 w-1/3">
+          <div className="flex items-center justify-center space-x-4 md:space-x-10 md:w-1/3">
             <button 
               onClick={() => skip(-15)} 
               disabled={!currentEpisode}
@@ -126,6 +135,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
               <span className="text-[8px] font-black mt-1">15s</span>
             </button>
             <button 
+              aria-label={isPlaying ? 'Pause' : 'Play'}
               onClick={togglePlay} 
               disabled={!currentEpisode}
               className="bg-white text-slate-900 w-14 h-14 rounded-full flex items-center justify-center hover:scale-105 active:scale-95 disabled:opacity-30 disabled:hover:scale-100 transition-all shadow-xl"
@@ -142,7 +152,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
             </button>
           </div>
 
-          <div className="w-1/3 flex justify-end items-center space-x-6 text-[10px] font-mono font-bold text-slate-500">
+          <div className="md:w-1/3 flex justify-end items-center space-x-2 md:space-x-6 text-[10px] font-mono font-bold text-slate-500">
             <button 
               onClick={() => setIsQueueOpen(!isQueueOpen)}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg transition-colors ${isQueueOpen ? 'bg-blue-600 text-white' : 'bg-slate-800 hover:bg-slate-700'}`}
@@ -156,6 +166,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
 
         <div className="w-full max-w-2xl px-4 flex items-center group">
           <input 
+            aria-label="Playback position"
             type="range"
             min="0"
             max={duration || 0}
