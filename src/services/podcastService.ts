@@ -1,12 +1,6 @@
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 import type { Podcast, Episode } from '../types';
 
-// Using corsproxy.io as primary as it's often faster for direct XML requests
-const PROXIES = [
-  'https://corsproxy.io/?',
-  'https://api.allorigins.win/raw?url=',
-];
-
 const FEED_REQUEST_TIMEOUT_MS = 10_000;
 
 const xmlParser = new XMLParser({
@@ -18,13 +12,30 @@ const xmlParser = new XMLParser({
 });
 
 export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podcast, episodes: Episode[] }> {
-  let lastError: unknown;
+  const url = new URL(feedUrl);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('Podcast feeds must use HTTP or HTTPS');
+  }
 
-  for (const proxy of PROXIES) {
+  const encodedUrl = encodeURIComponent(url.href);
+  const proxyKey = import.meta.env.VITE_CORSPROXY_KEY?.trim();
+  // Try the publisher directly before sending the feed URL to a CORS proxy.
+  const sources = [{ name: 'Publisher', url: url.href }];
+  if (proxyKey) {
+    sources.push({
+      name: 'CorsProxy',
+      url: `https://corsproxy.io/?key=${encodeURIComponent(proxyKey)}&url=${encodedUrl}`,
+    });
+  }
+  sources.push({ name: 'AllOrigins', url: `https://api.allorigins.win/raw?url=${encodedUrl}` });
+
+  const errors: Error[] = [];
+  for (const source of sources) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FEED_REQUEST_TIMEOUT_MS);
     try {
-      const response = await fetch(`${proxy}${encodeURIComponent(feedUrl)}`, {
+      const response = await fetch(source.url, {
+        credentials: 'omit',
         signal: controller.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -76,14 +87,15 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
 
       return { podcast, episodes };
     } catch (err) {
-      console.warn(`Proxy ${proxy} failed:`, err);
-      lastError = err;
+      errors.push(new Error(
+        `${source.name}: ${controller.signal.aborted ? 'Request timed out' : err instanceof Error ? err.message : 'Request failed'}`,
+      ));
     } finally {
       clearTimeout(timeout);
     }
   }
 
-  throw lastError || new Error('All proxies failed');
+  throw new AggregateError(errors, 'Failed to load podcast feed');
 }
 
 function isXmlRecord(value: unknown): value is Record<string, unknown> {

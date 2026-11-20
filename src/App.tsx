@@ -372,7 +372,7 @@ export default function App() {
     } catch (e) {
       if (activeFeedRef.current === podcast.feedUrl) {
         console.error(e);
-        setError('Failed to load feed. It may be too large or the proxy may be busy.');
+        setError('Could not load episodes from this feed. Check the feed URL or try again later.');
         setIsLoadingEpisodes(false);
       }
     }

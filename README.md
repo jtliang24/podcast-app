@@ -51,6 +51,10 @@ A modern, local-first podcast listening application designed for privacy, portab
 
 ### Development
 
+The app tries podcast feeds directly, then uses a CORS proxy if needed. Set
+`VITE_CORSPROXY_KEY` in `.env` to enable CorsProxy before the public AllOrigins
+fallback. Use a browser key restricted to your app's domains.
+
 Run the development server with HTTPS enabled:
 ```bash
 npm run dev
