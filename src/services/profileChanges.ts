@@ -2,7 +2,10 @@ import { INITIAL_STATE } from '../types.ts';
 import type { AppState, Podcast } from '../types.ts';
 
 const maps = ['playbackProgress', 'podcastSortOrders', 'playedEpisodes', 'hidePlayedEpisodes'] as const;
-const fields = ['queue', 'newReleases', 'lastRefresh', 'lastPlayingEpisode'] as const;
+const fields = [
+  'queue', 'newReleases', 'lastRefresh', 'lastPlayingEpisode',
+  'cellularDownload', 'autoDownloadQueued', 'skipBackwardSeconds', 'skipForwardSeconds',
+] as const;
 type MapField = typeof maps[number];
 type ScalarField = typeof fields[number];
 

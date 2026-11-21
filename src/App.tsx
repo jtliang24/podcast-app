@@ -4,11 +4,12 @@ import { searchStateFile, createStateFile } from './services/driveService';
 import { useFileSystem } from './hooks/useFileSystem';
 import { usePodcastPlayer } from './hooks/usePodcastPlayer';
 import { useAndroidPodcastPlayer } from './hooks/useAndroidPodcastPlayer';
+import { useDownloadPolicy, useDownloadStorage } from './hooks/useDownloads';
 import { AndroidFiles, isAndroid } from './services/android';
 import { fetchPodcastFeed, PrivateFeedError, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
-import { downloadEpisode, getAllDownloadedEpisodes, deleteDownload } from './services/storageService';
+import { getPreferences } from './services/preferences';
 import type { Podcast, Episode, SortOrder, AppState } from './types';
-import { Loader2, FolderOpen, Plus, Cloud } from 'lucide-react';
+import { Loader2, FolderOpen, Plus, Cloud, X } from 'lucide-react';
 import { INITIAL_STATE } from './types';
 
 // Components
@@ -21,18 +22,25 @@ import PodcastView from './components/PodcastView';
 import SearchResultsView from './components/SearchResultsView';
 import EpisodeDescriptionView from './components/EpisodeDescriptionView';
 import ReportBugButton from './components/ReportBugButton';
+import SettingsButton from './components/SettingsButton';
+import DownloadConfirmation from './components/DownloadConfirmation';
 
 const usePlayer = isAndroid ? useAndroidPodcastPlayer : usePodcastPlayer;
 
 export default function App() {
   const storage = useFileSystem();
+  const downloads = useDownloadStorage();
   const profile = storage.driveFileId && storage.storageMode === 'google-drive'
     ? `drive:${storage.driveFileId}` : `${storage.storageMode}:${storage.localLibraryId}`;
   // A storage switch starts a new player. Reconnecting the same library keeps its audio element.
-  return <Library key={profile} profile={profile} storage={storage} />;
+  return <Library key={profile} profile={profile} storage={storage} downloads={downloads} />;
 }
 
-function Library({ storage, profile }: { storage: ReturnType<typeof useFileSystem>; profile: string }) {
+function Library({ storage, profile, downloads }: {
+  storage: ReturnType<typeof useFileSystem>;
+  profile: string;
+  downloads: ReturnType<typeof useDownloadStorage>;
+}) {
   const { 
     state, 
     fileHandle, 
@@ -138,47 +146,29 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [isRefreshingNewReleases, setIsRefreshingNewReleases] = useState(false);
   
-  const [downloadsReady, setDownloadsReady] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
-  const attemptedDownloads = useRef(new Set<string>());
-  const [downloadedEpisodes, setDownloadedEpisodes] = useState<Episode[]>([]);
-  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
-  const activeDownloads = useRef(new Set<string>());
+  const { downloadsReady, downloadedEpisodes, downloadingIds, removeDownload } = downloads;
 
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [importingStatus, setImportingStatus] = useState<string | null>(null);
+  const preferences = getPreferences(state);
+  const { skipBackwardSeconds, skipForwardSeconds } = preferences;
+  const ready = !isLoading && !setupToken && (!isFileSystemAccessSupported || !!fileHandle || storageMode === 'google-drive');
 
   // Download Management
-  const handleDownload = useCallback(async (episode: Episode, automatic = false) => {
-    if (activeDownloads.current.has(episode.id)) return;
-    activeDownloads.current.add(episode.id);
-    setDownloadingIds(prev => new Set(prev).add(episode.id));
-    try {
-      await downloadEpisode(episode);
-      const newDeps = await getAllDownloadedEpisodes();
-      setDownloadedEpisodes(newDeps);
-    } catch (err) {
-      console.error('Download failed', err);
-      if (!automatic) setError('Could not download this episode.');
-    } finally {
-      activeDownloads.current.delete(episode.id);
-      setDownloadingIds(prev => {
-        const next = new Set(prev);
-        next.delete(episode.id);
-        return next;
-      });
-    }
-  }, []);
+  const { requestDownload: handleDownload, confirmation, answerConfirmation } = useDownloadPolicy({
+    ready, queue: state.queue, preferences, storage: downloads, onError: setDownloadError,
+  });
 
   const handleDeleteDownload = useCallback(async (episodeId: string) => {
     try {
-      await deleteDownload(episodeId);
-      setDownloadedEpisodes(await getAllDownloadedEpisodes());
+      await removeDownload(episodeId);
     } catch {
-      setError('Could not delete this download.');
+      setDownloadError('Could not delete this download.');
     }
-  }, []);
+  }, [removeDownload]);
 
   // Played State Logic
   const toggleEpisodePlayed = useCallback((episodeId: string, played: boolean) => {
@@ -221,33 +211,28 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
     formatTime,
     playEpisode
   } = usePlayer({
-    state, profile,
-    ready: !isLoading && !setupToken && (!isFileSystemAccessSupported || !!fileHandle || storageMode === 'google-drive'),
+    state, profile, ready, skipBackwardSeconds, skipForwardSeconds,
     updateState, downloadedEpisodes, downloadsReady, remoteSession,
   });
-
-  // Load downloads on mount
-  useEffect(() => {
-    getAllDownloadedEpisodes().then(setDownloadedEpisodes).catch(console.error).finally(() => setDownloadsReady(true));
-  }, []);
 
   // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.target instanceof HTMLInputElement) return;
+      if (e.defaultPrevented || !(e.target instanceof Element)) return;
+      if (e.target.closest('input, select, textarea, [contenteditable], dialog:not(#now-playing)')) return;
       if (e.code === 'Space') {
-        if (e.target instanceof Element && e.target.closest('button')) return;
+        if (e.target.closest('button')) return;
         e.preventDefault();
         togglePlay();
       } else if (e.code === 'ArrowRight') {
-        skip(30);
+        skip(skipForwardSeconds);
       } else if (e.code === 'ArrowLeft') {
-        skip(-15);
+        skip(-skipBackwardSeconds);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, togglePlay, skip]);
+  }, [togglePlay, skip, skipBackwardSeconds, skipForwardSeconds]);
 
   // Search and Subscription Handlers
   const handleSearch = async (e: React.FormEvent) => {
@@ -545,30 +530,6 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
     });
   }, [updateState, currentEpisode]);
 
-  const [online, setOnline] = useState(navigator.onLine);
-  useEffect(() => {
-    const connected = () => { attemptedDownloads.current.clear(); setOnline(true); };
-    const disconnected = () => setOnline(false);
-    window.addEventListener('online', connected);
-    window.addEventListener('offline', disconnected);
-    return () => {
-      window.removeEventListener('online', connected);
-      window.removeEventListener('offline', disconnected);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!online || !downloadsReady) return;
-    const nextToDownload = state.queue.find(e => 
-      !downloadedEpisodes.some(d => d.id === e.id) && 
-      !downloadingIds.has(e.id) && !attemptedDownloads.current.has(e.id)
-    );
-    if (nextToDownload) {
-      attemptedDownloads.current.add(nextToDownload.id);
-      void handleDownload(nextToDownload, true);
-    }
-  }, [state.queue, downloadedEpisodes, downloadingIds, handleDownload, downloadsReady, online]);
-
   // OPML and State Handlers
   const handleImportOPML = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -708,6 +669,7 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
       <main className="min-w-0 flex-1 flex flex-col pb-44 md:pb-32 overflow-hidden">
         <div className="flex flex-wrap items-center justify-end gap-3 px-6 pt-3 text-sm">
           <button className="mr-auto text-blue-300 md:hidden" aria-expanded={showLibrary} onClick={() => setShowLibrary(!showLibrary)}>Library</button>
+          <SettingsButton preferences={preferences} onChange={change => void updateState(previous => ({ ...previous, ...change }))} />
           <ReportBugButton />
           {storageMode !== 'google-drive' ? (
             <button className="text-blue-300" disabled={!!driveLoadingMessage} onClick={() => loginWithGoogle()}>{driveLoadingMessage || 'Connect Google Drive'}</button>
@@ -726,6 +688,15 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
             </button>
           )}
         </div>
+        {downloadError && (
+          <div className="fixed inset-x-4 bottom-44 z-[60] mx-auto flex max-w-md items-center gap-3 rounded-xl border border-red-400/40 bg-slate-900 px-4 py-2 text-sm text-red-300 shadow-xl md:bottom-32">
+            <p role="alert" className="flex-1">{downloadError}</p>
+            <button type="button" aria-label="Dismiss download message" className="grid h-11 w-11 shrink-0 place-items-center rounded-full hover:bg-slate-800" onClick={() => setDownloadError(null)}>
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        <DownloadConfirmation episode={confirmation} answer={answerConfirmation} />
         {offer && (hasRemoteOffer || (!isPlaying && viewMode === 'search' && !selectedPodcast && !selectedEpisode && !searchResults.length)) && (
           <section className="mx-4 mt-4 rounded-2xl border border-slate-700 bg-slate-900 p-4 md:mx-6">
             <p className="text-sm text-slate-300">{state.subscriptions.find(p => p.feedUrl === offer.episode.podcastId)?.title || offer.episode.podcastId}</p>
@@ -841,6 +812,8 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
         togglePlay={togglePlay}
         playEpisode={playEpisode}
         skip={skip}
+        skipBackwardSeconds={skipBackwardSeconds}
+        skipForwardSeconds={skipForwardSeconds}
         seek={seek}
         formatTime={formatTime}
         playbackError={playbackError}

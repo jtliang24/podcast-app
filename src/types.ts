@@ -27,6 +27,10 @@ export interface PlaybackProgress {
 
 export type SortOrder = 'newest' | 'oldest' | 'a-z' | 'z-a' | 'longest' | 'shortest';
 
+export type CellularDownload = 'yes' | 'no' | 'ask';
+export const SKIP_INTERVALS = [10, 15, 30, 60] as const;
+export type SkipInterval = typeof SKIP_INTERVALS[number];
+
 export interface AppState {
   subscriptions: Podcast[];
   playbackProgress: Record<string, PlaybackProgress>;
@@ -37,6 +41,10 @@ export interface AppState {
   playedEpisodes: Record<string, boolean>;
   hidePlayedEpisodes: Record<string, boolean>;
   lastPlayingEpisode?: Episode | null;
+  cellularDownload?: CellularDownload;
+  autoDownloadQueued?: boolean;
+  skipBackwardSeconds?: SkipInterval;
+  skipForwardSeconds?: SkipInterval;
 }
 
 export const INITIAL_STATE: AppState = {

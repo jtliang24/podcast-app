@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import type { Episode, AppState } from '../types';
+import type { Episode, AppState, SkipInterval } from '../types';
 import { getAudioBlob } from '../services/storageService';
 import { resumePoint } from '../services/driveSync';
 import type { ResumePoint } from '../services/driveSync';
@@ -9,6 +9,8 @@ export interface UsePodcastPlayerProps {
   profile: string;
   state: AppState;
   ready: boolean;
+  skipBackwardSeconds: SkipInterval;
+  skipForwardSeconds: SkipInterval;
   updateState: (update: StateUpdate, urgent?: boolean) => Promise<void | boolean>;
   downloadedEpisodes: Episode[];
   downloadsReady: boolean;
@@ -28,7 +30,7 @@ interface Selection extends ResumePoint {
 }
 
 export function usePodcastPlayer({
-  state, ready, updateState, downloadedEpisodes, downloadsReady, remoteSession,
+  state, ready, skipBackwardSeconds, skipForwardSeconds, updateState, downloadedEpisodes, downloadsReady, remoteSession,
 }: UsePodcastPlayerProps) {
   const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
   const playingPodcast = state.subscriptions.find(s => s.feedUrl === currentEpisode?.podcastId) ?? null;
@@ -249,8 +251,8 @@ export function usePodcastPlayer({
     media.playbackState = isPlaying ? 'playing' : 'paused';
     const actions: [MediaSessionAction, MediaSessionActionHandler][] = [
       ['play', play], ['pause', pause],
-      ['seekbackward', details => skip(-(details.seekOffset || 15))],
-      ['seekforward', details => skip(details.seekOffset || 30)],
+      ['seekbackward', details => skip(-(details.seekOffset ?? skipBackwardSeconds))],
+      ['seekforward', details => skip(details.seekOffset ?? skipForwardSeconds)],
       ['seekto', details => { if (details.seekTime !== undefined) seek(details.seekTime); }],
     ];
     for (const [action, handler] of actions) {
@@ -261,7 +263,7 @@ export function usePodcastPlayer({
         try { media.setActionHandler(action, null); } catch { /* Unsupported action. */ }
       }
     };
-  }, [isPlaying, play, pause, skip, seek]);
+  }, [isPlaying, play, pause, skip, seek, skipBackwardSeconds, skipForwardSeconds]);
 
   const handleEpisodeEnded = () => {
     const audio = audioRef.current;

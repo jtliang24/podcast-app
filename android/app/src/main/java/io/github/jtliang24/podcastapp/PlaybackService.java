@@ -12,6 +12,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
+import androidx.media3.common.ForwardingSimpleBasePlayer;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.PlaybackException;
@@ -21,6 +22,8 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
 import com.getcapacitor.JSObject;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -54,6 +57,7 @@ public class PlaybackService extends MediaSessionService {
     };
 
     private ExoPlayer player;
+    private SessionPlayer sessionPlayer;
     private MediaSession session;
     private EpisodeDownloads downloads;
     private SharedPreferences journal;
@@ -73,13 +77,12 @@ public class PlaybackService extends MediaSessionService {
             .setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_SPEECH).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
-            .setSeekBackIncrementMs(15_000)
-            .setSeekForwardIncrementMs(30_000)
             .build();
+        sessionPlayer = new SessionPlayer(player);
         PendingIntent launch = PendingIntent.getActivity(this, 0,
             new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        session = new MediaSession.Builder(this, player).setSessionActivity(launch)
+        session = new MediaSession.Builder(this, sessionPlayer).setSessionActivity(launch)
             .setCallback(new MediaSession.Callback() {
                 @Override
                 public MediaSession.ConnectionResult onConnect(MediaSession mediaSession, MediaSession.ControllerInfo controller) {
@@ -149,13 +152,14 @@ public class PlaybackService extends MediaSessionService {
         main.removeCallbacksAndMessages(null);
         replacing = true;
         session.release();
-        player.release();
+        sessionPlayer.release();
         super.onDestroy();
     }
 
     JSObject control(String requestedProfile, String action, JSONObject options) throws JSONException {
         if ("open".equals(action)) {
             if (!requestedProfile.equals(profile)) open(requestedProfile, options);
+            sessionPlayer.setSeekIncrements(options);
         } else {
             if (!requestedProfile.equals(profile)) throw new IllegalStateException("The playback library has changed");
             switch (action) {
@@ -177,6 +181,9 @@ public class PlaybackService extends MediaSessionService {
                 case "seek":
                     seek(milliseconds(options.getDouble("time")));
                     break;
+                case "seekIncrements":
+                    sessionPlayer.setSeekIncrements(options);
+                    break;
                 case "acknowledge":
                     long acknowledged = options.getLong("revision");
                     for (Iterator<JSONObject> changes = pending.values().iterator(); changes.hasNext();) {
@@ -189,6 +196,49 @@ public class PlaybackService extends MediaSessionService {
             }
         }
         return snapshot();
+    }
+
+    private final class SessionPlayer extends ForwardingSimpleBasePlayer {
+        private long backMs = 15_000;
+        private long forwardMs = 30_000;
+
+        SessionPlayer(Player player) {
+            super(player);
+        }
+
+        void setSeekIncrements(JSONObject options) {
+            long back = seekIncrement(options.optInt("skipBackwardSeconds"), 15_000);
+            long forward = seekIncrement(options.optInt("skipForwardSeconds"), 30_000);
+            if (back == backMs && forward == forwardMs) return;
+            backMs = back;
+            forwardMs = forward;
+            invalidateState();
+        }
+
+        private long seekIncrement(int seconds, long fallback) {
+            return switch (seconds) {
+                case 10, 15, 30, 60 -> seconds * 1000L;
+                default -> fallback;
+            };
+        }
+
+        @Override
+        protected State getState() {
+            return super.getState().buildUpon()
+                .setSeekBackIncrementMs(backMs).setSeekForwardIncrementMs(forwardMs).build();
+        }
+
+        @Override
+        protected ListenableFuture<?> handleSeek(int mediaItemIndex, long positionMs, int command) {
+            if (command == Player.COMMAND_SEEK_BACK) {
+                seek(position() - backMs);
+            } else if (command == Player.COMMAND_SEEK_FORWARD) {
+                seek(position() + forwardMs);
+            } else {
+                return super.handleSeek(mediaItemIndex, positionMs, command);
+            }
+            return Futures.immediateVoidFuture();
+        }
     }
 
     private void open(String requestedProfile, JSONObject options) throws JSONException {

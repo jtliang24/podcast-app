@@ -45,10 +45,9 @@ async function saveDownload(episode: Episode, audioBlob: Blob): Promise<void> {
       audioBlob: audioBlob,
     };
 
-    const request = store.put(record);
-
-    request.onsuccess = () => resolve();
-    request.onerror = (event) => reject((event.target as IDBRequest).error);
+    store.put(record);
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error);
   });
 }
 
@@ -90,9 +89,8 @@ export async function deleteDownload(episodeId: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    const request = store.delete(episodeId);
-
-    request.onsuccess = () => resolve();
-    request.onerror = (event) => reject((event.target as IDBRequest).error);
+    store.delete(episodeId);
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error);
   });
 }

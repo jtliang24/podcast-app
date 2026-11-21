@@ -1,5 +1,6 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import type { Episode } from '../types.ts';
+import type { PluginListenerHandle } from '@capacitor/core';
 
 export const isAndroid = Capacitor.getPlatform() === 'android';
 
@@ -31,13 +32,20 @@ export interface AndroidPlaybackState {
 
 interface PlaybackCommand {
   profile: string;
-  action: 'open' | 'snapshot' | 'queue' | 'select' | 'toggle' | 'seek' | 'skip' | 'acknowledge';
+  action: 'open' | 'snapshot' | 'queue' | 'select' | 'toggle' | 'seek' | 'skip' | 'seekIncrements' | 'acknowledge';
   queue?: AndroidTrack[];
   track?: AndroidTrack;
   autoplay?: boolean;
   time?: number;
   revision?: number;
   updated?: number;
+  skipBackwardSeconds?: number;
+  skipForwardSeconds?: number;
+}
+
+export interface DownloadConnection {
+  transport: 'offline' | 'unknown' | 'cellular' | 'other';
+  id: string;
 }
 
 interface LocalState {
@@ -64,6 +72,11 @@ export const AndroidDownloads = registerPlugin<{
   list(): Promise<{ episodes: Episode[] }>;
   remove(options: { id: string }): Promise<void>;
 }>('PodcastDownloads');
+
+export const AndroidConnectivity = registerPlugin<{
+  getStatus(): Promise<DownloadConnection>;
+  addListener(event: 'connectionChange', listener: (connection: DownloadConnection) => void): Promise<PluginListenerHandle>;
+}>('PodcastConnectivity');
 
 export const AndroidHttp = registerPlugin<{
   get(options: { url: string; privateFeed?: boolean }): Promise<{ status: number; body: string }>;

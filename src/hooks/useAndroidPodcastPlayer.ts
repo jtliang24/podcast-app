@@ -15,16 +15,20 @@ function track(state: AppState, episode: Episode, time = state.playbackProgress[
   return { episode, time, podcastTitle: podcast?.title, artworkUrl: podcast?.artworkUrl };
 }
 
-export function useAndroidPodcastPlayer({ profile, ready, state, updateState, remoteSession }: UsePodcastPlayerProps) {
+export function useAndroidPodcastPlayer({
+  profile, ready, state, updateState, remoteSession, skipBackwardSeconds, skipForwardSeconds,
+}: UsePodcastPlayerProps) {
   const [playback, setPlayback] = useState<AndroidPlaybackState | null>(null);
   const [connectionError, setConnectionError] = useState(false);
   const [remoteOffer, setRemoteOffer] = useState<ResumePoint | null>(null);
-  const storage = useRef({ state, updateState });
+  const storage = useRef({ state, updateState, skipBackwardSeconds, skipForwardSeconds });
   const active = useRef(false);
   const operations = useRef(Promise.resolve());
   const saving = useRef(false);
 
-  useEffect(() => { storage.current = { state, updateState }; }, [state, updateState]);
+  useEffect(() => {
+    storage.current = { state, updateState, skipBackwardSeconds, skipForwardSeconds };
+  }, [state, updateState, skipBackwardSeconds, skipForwardSeconds]);
   useEffect(() => { setRemoteOffer(remoteSession); }, [remoteSession]);
 
   const request = useCallback((command: Command) => {
@@ -52,13 +56,15 @@ export function useAndroidPodcastPlayer({ profile, ready, state, updateState, re
   }, [profile]);
 
   const open = useCallback(() => {
-    const state = storage.current.state;
+    const { state, skipBackwardSeconds, skipForwardSeconds } = storage.current;
     const point = resumePoint(state);
     return request({
       action: 'open',
       track: point ? track(state, point.episode, point.time) : undefined,
       updated: point ? state.playbackProgress[point.episode.audioUrl]?.lastUpdated : undefined,
       queue: state.queue.map(episode => track(state, episode)),
+      skipBackwardSeconds,
+      skipForwardSeconds,
     });
   }, [request]);
 
@@ -83,6 +89,10 @@ export function useAndroidPodcastPlayer({ profile, ready, state, updateState, re
   }, [open, ready, request]);
 
   const { queue, subscriptions, playbackProgress } = state;
+  useEffect(() => {
+    if (ready) void request({ action: 'seekIncrements', skipBackwardSeconds, skipForwardSeconds });
+  }, [ready, request, skipBackwardSeconds, skipForwardSeconds]);
+
   useEffect(() => {
     if (ready) {
       const current = storage.current.state;

@@ -3,7 +3,7 @@ import {
   RotateCcw, RotateCw, Pause, Play, List, X, 
   ChevronUp, ChevronDown, Maximize2, Trash2, Podcast as PodcastIcon
 } from 'lucide-react';
-import type { Episode, Podcast, AppState } from '../types';
+import type { Episode, Podcast, AppState, SkipInterval } from '../types';
 import NowPlayingScreen from './NowPlayingScreen';
 
 interface PodcastPlayerProps {
@@ -16,6 +16,8 @@ interface PodcastPlayerProps {
   togglePlay: () => void;
   playEpisode: (episode: Episode) => void;
   skip: (seconds: number) => void;
+  skipBackwardSeconds: SkipInterval;
+  skipForwardSeconds: SkipInterval;
   seek: (time: number) => void;
   formatTime: (time: number) => string;
   playbackError: boolean;
@@ -34,6 +36,8 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
   togglePlay,
   playEpisode,
   skip,
+  skipBackwardSeconds,
+  skipForwardSeconds,
   seek,
   formatTime,
   playbackError,
@@ -141,12 +145,13 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
 
           <div className="flex items-center justify-center space-x-4 md:space-x-10 md:w-1/3">
             <button 
-              onClick={() => skip(-15)} 
+              aria-label={`Back ${skipBackwardSeconds} seconds`}
+              onClick={() => skip(-skipBackwardSeconds)}
               disabled={!currentEpisode}
               className="text-slate-500 hover:text-white disabled:opacity-30 disabled:hover:text-slate-500 transition-colors flex flex-col items-center"
             >
               <RotateCcw size={22} />
-              <span className="text-[8px] font-black mt-1">15s</span>
+              <span className="text-[8px] font-black mt-1">{skipBackwardSeconds}s</span>
             </button>
             <button 
               aria-label={isPlaying ? 'Pause' : 'Play'}
@@ -157,12 +162,13 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
               {isPlaying ? <Pause fill="currentColor" size={28} /> : <Play fill="currentColor" size={28} className="ml-1" />}
             </button>
             <button 
-              onClick={() => skip(30)} 
+              aria-label={`Forward ${skipForwardSeconds} seconds`}
+              onClick={() => skip(skipForwardSeconds)}
               disabled={!currentEpisode}
               className="text-slate-500 hover:text-white disabled:opacity-30 disabled:hover:text-slate-500 transition-colors flex flex-col items-center"
             >
               <RotateCw size={22} />
-              <span className="text-[8px] font-black mt-1">30s</span>
+              <span className="text-[8px] font-black mt-1">{skipForwardSeconds}s</span>
             </button>
           </div>
 
@@ -201,6 +207,8 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
         duration={duration}
         togglePlay={togglePlay}
         skip={skip}
+        skipBackwardSeconds={skipBackwardSeconds}
+        skipForwardSeconds={skipForwardSeconds}
         seek={seek}
         formatTime={formatTime}
         playbackError={playbackError}

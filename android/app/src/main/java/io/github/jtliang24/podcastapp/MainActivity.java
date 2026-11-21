@@ -18,6 +18,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(PodcastPlaybackPlugin.class);
         registerPlugin(PodcastFilesPlugin.class);
         registerPlugin(PodcastDownloadsPlugin.class);
+        registerPlugin(PodcastConnectivityPlugin.class);
         registerPlugin(PodcastHttpPlugin.class);
         registerPlugin(PodcastDrivePlugin.class);
         super.onCreate(savedInstanceState);

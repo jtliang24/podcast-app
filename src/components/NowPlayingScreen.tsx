@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { CSSProperties, Ref } from 'react';
 import { ChevronDown, Pause, Play, Podcast as PodcastIcon, RotateCcw, RotateCw } from 'lucide-react';
-import type { Episode, Podcast } from '../types';
+import type { Episode, Podcast, SkipInterval } from '../types';
 
 interface PlaybackTimelineProps {
   currentTime: number;
@@ -17,6 +17,8 @@ interface NowPlayingScreenProps extends PlaybackTimelineProps {
   isPlaying: boolean;
   togglePlay: () => void;
   skip: (seconds: number) => void;
+  skipBackwardSeconds: SkipInterval;
+  skipForwardSeconds: SkipInterval;
   playbackError: boolean;
   retry: () => void;
 }
@@ -77,7 +79,7 @@ function PlaybackTimeline({ currentTime, duration, seek, formatTime }: PlaybackT
 }
 
 export default function NowPlayingScreen({
-  ref, episode, podcast, isPlaying, togglePlay, skip, playbackError, retry, ...timeline
+  ref, episode, podcast, isPlaying, togglePlay, skip, skipBackwardSeconds, skipForwardSeconds, playbackError, retry, ...timeline
 }: NowPlayingScreenProps) {
   return (
     <dialog
@@ -121,16 +123,16 @@ export default function NowPlayingScreen({
           <PlaybackTimeline key={episode.audioUrl} {...timeline} />
 
           <div className="flex items-center gap-7 md:gap-10">
-            <button type="button" aria-label="Back 15 seconds" onClick={() => skip(-15)} className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-full text-slate-300 hover:bg-slate-800 hover:text-white">
+            <button type="button" aria-label={`Back ${skipBackwardSeconds} seconds`} onClick={() => skip(-skipBackwardSeconds)} className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-full text-slate-300 hover:bg-slate-800 hover:text-white">
               <RotateCcw size={24} aria-hidden="true" />
-              <span className="text-xs font-semibold">15s</span>
+              <span className="text-xs font-semibold">{skipBackwardSeconds}s</span>
             </button>
             <button type="button" aria-label={isPlaying ? 'Pause' : 'Play'} onClick={togglePlay} className="grid h-16 w-16 place-items-center rounded-full bg-white text-slate-900 shadow-lg hover:bg-slate-200">
               {isPlaying ? <Pause fill="currentColor" size={30} /> : <Play fill="currentColor" size={30} className="ml-1" />}
             </button>
-            <button type="button" aria-label="Forward 30 seconds" onClick={() => skip(30)} className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-full text-slate-300 hover:bg-slate-800 hover:text-white">
+            <button type="button" aria-label={`Forward ${skipForwardSeconds} seconds`} onClick={() => skip(skipForwardSeconds)} className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-full text-slate-300 hover:bg-slate-800 hover:text-white">
               <RotateCw size={24} aria-hidden="true" />
-              <span className="text-xs font-semibold">30s</span>
+              <span className="text-xs font-semibold">{skipForwardSeconds}s</span>
             </button>
           </div>
         </div>
