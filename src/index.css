@@ -21,7 +21,7 @@ body {
   min-height: 100vh;
 }
 
-body:has(.now-playing-dialog[open]) {
+body:has(.now-playing-dialog[open], .bug-report-dialog[open]) {
   overflow: hidden;
 }
 

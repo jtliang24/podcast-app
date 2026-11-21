@@ -4,8 +4,17 @@ import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.UriPermission;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Rect;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.AtomicFile;
+import android.util.Base64;
+import android.view.PixelCopy;
+import android.webkit.WebView;
 import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -13,6 +22,7 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -117,6 +127,59 @@ public class PodcastFilesPlugin extends Plugin {
         launchPicker(call, picker, "exportResult");
     }
 
+    @PluginMethod
+    public void captureScreenshot(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            WebView view = getBridge().getWebView();
+            int width = view.getWidth();
+            int height = view.getHeight();
+            if (!view.isAttachedToWindow() || width == 0 || height == 0) {
+                call.reject("The app view is not ready.");
+                return;
+            }
+
+            float scale = Math.min(1f, 1600f / Math.max(width, height));
+            Bitmap image = Bitmap.createBitmap(Math.max(1, Math.round(width * scale)),
+                Math.max(1, Math.round(height * scale)), Bitmap.Config.ARGB_8888);
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    int[] position = new int[2];
+                    view.getLocationInWindow(position);
+                    Rect bounds = new Rect(position[0], position[1], position[0] + width, position[1] + height);
+                    PixelCopy.request(getActivity().getWindow(), bounds, image, result -> {
+                        if (result == PixelCopy.SUCCESS) {
+                            encodeScreenshot(call, image);
+                        } else {
+                            image.recycle();
+                            call.reject("Could not capture the app view.");
+                        }
+                    }, new Handler(Looper.getMainLooper()));
+                } else {
+                    Canvas canvas = new Canvas(image);
+                    canvas.scale(scale, scale);
+                    view.draw(canvas);
+                    encodeScreenshot(call, image);
+                }
+            } catch (RuntimeException ignored) {
+                image.recycle();
+                call.reject("Could not capture the app view.");
+            }
+        });
+    }
+
+    private void encodeScreenshot(PluginCall call, Bitmap image) {
+        FILES.execute(() -> {
+            try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                if (!image.compress(Bitmap.CompressFormat.PNG, 100, output)) throw new IOException("PNG encoding failed");
+                call.resolve(new JSObject().put("base64", Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)));
+            } catch (Exception ignored) {
+                call.reject("Could not encode the screenshot.");
+            } finally {
+                image.recycle();
+            }
+        });
+    }
+
     private Intent documentPicker(boolean create, String name, String mimeType) {
         Intent intent = new Intent(create ? Intent.ACTION_CREATE_DOCUMENT : Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -187,7 +250,11 @@ public class PodcastFilesPlugin extends Plugin {
             if (call == null) return;
             Uri uri = pickedUri(response);
             try {
-                if (uri != null) writeDocument(uri, call.getString("content"));
+                if (uri != null) {
+                    String content = call.getString("content");
+                    if ("base64".equals(call.getString("encoding"))) writeDocument(uri, Base64.decode(content, Base64.DEFAULT));
+                    else writeDocument(uri, content);
+                }
                 call.resolve();
             } catch (Exception ignored) {
                 call.reject("Could not write the exported file.");
@@ -227,10 +294,14 @@ public class PodcastFilesPlugin extends Plugin {
     }
 
     private void writeDocument(Uri uri, String content) throws IOException {
+        writeDocument(uri, content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void writeDocument(Uri uri, byte[] content) throws IOException {
         // rwt truncates older, longer versions of the document.
         try (OutputStream output = resolver().openOutputStream(uri, "rwt")) {
             if (output == null) throw new IOException("Document unavailable");
-            output.write(content.getBytes(StandardCharsets.UTF_8));
+            output.write(content);
         }
     }
 

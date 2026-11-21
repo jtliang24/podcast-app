@@ -20,6 +20,7 @@ import DownloadsView from './components/DownloadsView';
 import PodcastView from './components/PodcastView';
 import SearchResultsView from './components/SearchResultsView';
 import EpisodeDescriptionView from './components/EpisodeDescriptionView';
+import ReportBugButton from './components/ReportBugButton';
 
 const usePlayer = isAndroid ? useAndroidPodcastPlayer : usePodcastPlayer;
 
@@ -655,6 +656,7 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
             <input type="file" accept=".json" className="hidden" onChange={handleUploadLocalStateToDrive} />
           </label>
         </div>
+        <div className="mt-6"><ReportBugButton /></div>
       </div>
     );
   }
@@ -681,6 +683,7 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
             <Plus className="mr-3" /> Create New Local File
           </button>
         </div>
+        <div className="mt-6"><ReportBugButton /></div>
       </div>
     );
   }
@@ -705,6 +708,7 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
       <main className="min-w-0 flex-1 flex flex-col pb-44 md:pb-32 overflow-hidden">
         <div className="flex flex-wrap items-center justify-end gap-3 px-6 pt-3 text-sm">
           <button className="mr-auto text-blue-300 md:hidden" aria-expanded={showLibrary} onClick={() => setShowLibrary(!showLibrary)}>Library</button>
+          <ReportBugButton />
           {storageMode !== 'google-drive' ? (
             <button className="text-blue-300" disabled={!!driveLoadingMessage} onClick={() => loginWithGoogle()}>{driveLoadingMessage || 'Connect Google Drive'}</button>
           ) : syncStatus === 'Reconnect Google Drive' ? (

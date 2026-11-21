@@ -55,7 +55,8 @@ export const AndroidFiles = registerPlugin<{
   readState(): Promise<LocalState>;
   writeState(options: { id: string; json: string }): Promise<{ reconnect: boolean }>;
   linkState(options: { action: 'open' | 'create' | 'reconnect' }): Promise<LocalState | { cancelled: true }>;
-  exportFile(options: { name: string; mimeType: string; content: string }): Promise<void>;
+  exportFile(options: { name: string; mimeType: string; content: string; encoding?: 'base64' }): Promise<void>;
+  captureScreenshot(): Promise<{ base64: string }>;
 }>('PodcastFiles');
 
 export const AndroidDownloads = registerPlugin<{
