@@ -19,6 +19,7 @@ import com.google.android.gms.common.api.CommonStatusCodes;
 import com.google.android.gms.common.api.Scope;
 import com.google.android.gms.common.api.UnsupportedApiCallException;
 import java.util.Collections;
+import java.util.List;
 
 @CapacitorPlugin(name = "PodcastDrive")
 public class PodcastDrivePlugin extends Plugin {
@@ -93,7 +94,10 @@ public class PodcastDrivePlugin extends Plugin {
 
     private static void resolveToken(PluginCall call, AuthorizationResult result) {
         String token = result.getAccessToken();
-        if (token == null || !result.getGrantedScopes().contains(new Scope(Scopes.DRIVE_APPFOLDER))) {
+        List<String> grantedScopes = result.getGrantedScopes();
+        if (token == null || token.isEmpty()) {
+            call.reject("Google did not return a Drive access token. Try connecting again.");
+        } else if (grantedScopes == null || !grantedScopes.contains(Scopes.DRIVE_APPFOLDER)) {
             call.reject("Google did not grant the app-data permission. Try again and allow access to Podcast Player's Drive data.");
         } else {
             call.resolve(new JSObject().put("token", token));
