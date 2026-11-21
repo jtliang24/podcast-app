@@ -202,11 +202,16 @@ Actions**, or set them with the GitHub CLI from the repository root.
 | Secret | Value |
 | --- | --- |
 | `ANDROID_KEYSTORE_BASE64` | Base64 of the existing release keystore used to sign updates |
-| `ANDROID_SIGNING_PROPERTIES` | Contents of the local `keystore.properties` with `storePassword`, `keyAlias`, and `keyPassword`. The workflow sets `storeFile` to the decoded keystore. |
+| `ANDROID_SIGNING_PROPERTIES` | Three lines in Java properties format for `storePassword`, `keyAlias`, and `keyPassword` |
+
+Omit `storeFile` from the secret. The workflow sets it to the decoded keystore
+on the GitHub runner. The command below copies only the three signing entries
+from a local file that uses one `key=value` entry per line.
 
 ```bash
 base64 < /secure/path/podcast-player.p12 | gh secret set ANDROID_KEYSTORE_BASE64
-gh secret set ANDROID_SIGNING_PROPERTIES < /secure/path/keystore.properties
+sed -nE '/^[[:blank:]]*(storePassword|keyAlias|keyPassword)[[:blank:]]*=/p' \
+  /secure/path/keystore.properties | gh secret set ANDROID_SIGNING_PROPERTIES
 ```
 
 Make sure the version in `package.json` and Android's `versionName` both match
