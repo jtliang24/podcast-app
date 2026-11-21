@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { 
   RotateCcw, RotateCw, Pause, Play, List, X, 
-  ChevronUp, ChevronDown, Trash2, Podcast as PodcastIcon 
+  ChevronUp, ChevronDown, Maximize2, Trash2, Podcast as PodcastIcon
 } from 'lucide-react';
 import type { Episode, Podcast, AppState } from '../types';
+import NowPlayingScreen from './NowPlayingScreen';
 
 interface PodcastPlayerProps {
   state: AppState;
@@ -15,7 +16,7 @@ interface PodcastPlayerProps {
   togglePlay: () => void;
   playEpisode: (episode: Episode) => void;
   skip: (seconds: number) => void;
-  handleSeek: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  seek: (time: number) => void;
   formatTime: (time: number) => string;
   playbackError: boolean;
   retry: () => void;
@@ -33,7 +34,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
   togglePlay,
   playEpisode,
   skip,
-  handleSeek,
+  seek,
   formatTime,
   playbackError,
   retry,
@@ -41,6 +42,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
   removeFromQueue
 }) => {
   const [isQueueOpen, setIsQueueOpen] = useState(false);
+  const nowPlayingRef = useRef<HTMLDialogElement>(null);
 
   return (
     <footer className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-3 md:p-6 z-50">
@@ -111,19 +113,31 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
       )}
       <div className="max-w-screen-2xl mx-auto flex flex-col items-center">
         <div className="w-full flex flex-wrap items-center justify-between gap-y-2 mb-2">
-          <div className="flex items-center space-x-3 w-full md:w-1/3 min-w-0">
+          <button
+            type="button"
+            aria-label={currentEpisode ? `Open Now Playing: ${currentEpisode.title}` : undefined}
+            aria-haspopup="dialog"
+            aria-controls="now-playing"
+            onClick={event => {
+              event.currentTarget.focus();
+              nowPlayingRef.current?.showModal();
+            }}
+            disabled={!currentEpisode}
+            className="flex w-full min-w-0 items-center gap-3 rounded-lg text-left enabled:hover:bg-slate-800 md:w-1/3"
+          >
             {playingPodcast?.artworkUrl ? (
-              <img src={playingPodcast.artworkUrl} className="w-12 h-12 rounded shadow-lg bg-slate-800" alt="" />
+              <img src={playingPodcast.artworkUrl} className="h-12 w-12 shrink-0 rounded bg-slate-800 shadow-lg" alt="" />
             ) : (
-              <div className="w-12 h-12 rounded shadow-lg bg-slate-800 flex items-center justify-center text-slate-600">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded bg-slate-800 text-slate-600 shadow-lg">
                 <PodcastIcon size={24} />
-              </div>
+              </span>
             )}
-            <div className="min-w-0">
-              <div className="font-bold truncate text-sm">{currentEpisode?.title || 'No episode selected'}</div>
-              <div className="text-[10px] text-blue-400 font-bold truncate uppercase tracking-wider">{playingPodcast?.title || (currentEpisode ? 'Unknown Podcast' : 'Ready to listen')}</div>
-            </div>
-          </div>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-bold">{currentEpisode?.title || 'No episode selected'}</span>
+              <span className="block truncate text-[10px] font-bold uppercase tracking-wider text-blue-400">{playingPodcast?.title || (currentEpisode ? 'Unknown Podcast' : 'Ready to listen')}</span>
+            </span>
+            {currentEpisode && <Maximize2 size={18} className="ml-auto mr-3 shrink-0 text-blue-400" aria-hidden="true" />}
+          </button>
 
           <div className="flex items-center justify-center space-x-4 md:space-x-10 md:w-1/3">
             <button 
@@ -172,12 +186,26 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
             max={duration || 0}
             step="0.1"
             value={currentTime}
-            onChange={handleSeek}
+            onChange={event => seek(event.currentTarget.valueAsNumber)}
             disabled={!currentEpisode}
             className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 disabled:opacity-30 disabled:cursor-default transition-all"
           />
         </div>
       </div>
+      <NowPlayingScreen
+        ref={nowPlayingRef}
+        episode={currentEpisode}
+        podcast={playingPodcast}
+        isPlaying={isPlaying}
+        currentTime={currentTime}
+        duration={duration}
+        togglePlay={togglePlay}
+        skip={skip}
+        seek={seek}
+        formatTime={formatTime}
+        playbackError={playbackError}
+        retry={retry}
+      />
     </footer>
   );
 };

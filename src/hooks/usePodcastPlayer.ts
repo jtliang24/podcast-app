@@ -195,8 +195,6 @@ export function usePodcastPlayer({
     const time = item?.positioned ? audioRef.current?.currentTime : item?.time;
     if (time !== undefined) seek(time + seconds);
   }, [seek]);
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => seek(Number(e.target.value));
-
   const playEpisode = useCallback((episode: Episode) => {
     setRemoteOffer(null);
     if (selected.current?.episode.audioUrl === episode.audioUrl) togglePlay();
@@ -311,7 +309,7 @@ export function usePodcastPlayer({
 
   return {
     currentEpisode, playingPodcast, isPlaying, currentTime, duration, audioRef, offer, hasRemoteOffer: !!remoteOffer, continueListening,
-    playbackError, retry, togglePlay, skip, handleSeek, formatTime, playEpisode,
+    playbackError, retry, togglePlay, skip, seek, formatTime, playEpisode,
     audioEvents: { onLoadedMetadata: onMetadata, onPlaying, onPause, onTimeUpdate, onEnded: handleEpisodeEnded,
       onWaiting: () => setIsPlaying(false), onEmptied: () => setIsPlaying(false), onError },
   };

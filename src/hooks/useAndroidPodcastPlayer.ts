@@ -109,9 +109,9 @@ export function useAndroidPodcastPlayer({ profile, ready, state, updateState, re
     setRemoteOffer(null);
     void request({ action: 'skip', time: seconds });
   }, [request]);
-  const handleSeek = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const seek = (time: number) => {
     setRemoteOffer(null);
-    void request({ action: 'seek', time: Number(event.target.value) });
+    void request({ action: 'seek', time });
   };
   const continueListening = () => {
     if (!offer) return;
@@ -129,7 +129,7 @@ export function useAndroidPodcastPlayer({ profile, ready, state, updateState, re
     currentTime: playback?.time ?? 0,
     duration: playback?.duration ?? 0,
     playbackError: connectionError || (playback?.error ?? false),
-    retry, togglePlay, skip, handleSeek, formatTime, playEpisode,
+    retry, togglePlay, skip, seek, formatTime, playEpisode,
     audioRef: null, audioEvents: {},
   };
 }

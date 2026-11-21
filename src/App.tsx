@@ -216,7 +216,7 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
     hasRemoteOffer,
     togglePlay,
     skip,
-    handleSeek,
+    seek,
     formatTime,
     playEpisode
   } = usePlayer({
@@ -233,8 +233,9 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
   // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
+      if (e.defaultPrevented || e.target instanceof HTMLInputElement) return;
       if (e.code === 'Space') {
+        if (e.target instanceof Element && e.target.closest('button')) return;
         e.preventDefault();
         togglePlay();
       } else if (e.code === 'ArrowRight') {
@@ -836,7 +837,7 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
         togglePlay={togglePlay}
         playEpisode={playEpisode}
         skip={skip}
-        handleSeek={handleSeek}
+        seek={seek}
         formatTime={formatTime}
         playbackError={playbackError}
         retry={retry}
