@@ -3,14 +3,14 @@ import { AndroidDrive, isAndroid } from '../services/android';
 
 interface DriveLogin {
   onSuccess: (token: string) => void;
-  onError: () => void;
+  onError: (message?: string) => void;
 }
 
 function useBrowserDriveLogin({ onSuccess, onError }: DriveLogin) {
   return useGoogleLogin({
     scope: 'https://www.googleapis.com/auth/drive.appdata',
     onSuccess: result => onSuccess(result.access_token),
-    onError,
+    onError: () => onError(),
   });
 }
 
@@ -18,7 +18,9 @@ function useAndroidDriveLogin({ onSuccess, onError }: DriveLogin) {
   return () => {
     void AndroidDrive.authorize({ interactive: true }).then(({ token }) => {
       if (token) onSuccess(token);
-    }, onError);
+    }, (error: unknown) => {
+      onError(error instanceof Error ? error.message : undefined);
+    });
   };
 }
 

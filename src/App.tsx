@@ -79,8 +79,8 @@ function Library({ storage, profile }: { storage: ReturnType<typeof useFileSyste
         setDriveLoadingMessage(null);
       }
     },
-    onError: () => {
-      alert('Failed to authorize Google Drive.');
+    onError: (message) => {
+      alert(message || 'Failed to authorize Google Drive.');
     },
   });
 
