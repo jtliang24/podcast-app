@@ -23,6 +23,7 @@
       devShells = forEachSupportedSystem ({ pkgs }: {
         default = pkgs.mkShell {
           packages = [
+            pkgs.zulu
             pkgs.nodejs
             pkgs.typescript
             pkgs.typescript-language-server
