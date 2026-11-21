@@ -74,6 +74,121 @@ Build the project for production:
 npm run build
 ```
 
+## Android APK
+
+The app supports Android 6.0 (API 23) and later with an up-to-date Android
+System WebView or Chrome. Google Drive sync requires Google Play services.
+
+### Build a debug APK
+
+Install Node.js 20 or newer, JDK 21, Android SDK Platform 35, and Android SDK
+Build-Tools 35.0.0. Set `JAVA_HOME` and `ANDROID_HOME`, or set `sdk.dir` in
+`android/local.properties`. Capacitor Core, CLI, and Android are pinned to
+7.4.4. The project includes the Gradle 8.11.1 wrapper.
+[Capacitor 7 Android setup](https://capacitorjs.com/docs/v7/getting-started/environment-setup)
+
+Run these commands from the repository root.
+
+```bash
+npm ci
+npm test
+npm run lint
+npm run build
+npm run build -- --mode android
+npx cap sync android
+cd android
+./gradlew assembleDebug
+```
+
+The Android-mode build bundles the site in the APK, disables the service worker,
+and omits browser OAuth and CORS proxy settings. The debug APK is
+`android/app/build/outputs/apk/debug/app-debug.apk`. Use
+`adb install -r android/app/build/outputs/apk/debug/app-debug.apk` from the
+repository root to install it on a connected device.
+
+### Move a library to Android
+
+- **JSON**. In the browser's Library, choose **Export**. Copy the file to the
+  phone. In the Android app's Library, choose **Import** to load a copy into
+  app-private storage or **Open and link JSON file** to keep writing to that
+  document. **Create linked JSON file** writes the current library to a new
+  document. If access is revoked, **Reconnect JSON file** writes the retained
+  library to the writable document you select.
+- **Google Drive**. Push pending changes from the browser, then choose
+  **Connect Google Drive** in the Android app and authorize the same account.
+  The APK must have a registered signing certificate to use Drive.
+- Download audio again in the Android app. Browser downloads are stored in the
+  browser and the APK keeps its own downloads. Android fetches RSS and streams
+  audio over HTTPS. Private Substack RSS links go directly to Substack.
+- Android saves playback checkpoints while the screen is locked and applies
+  them to your library when you reopen the app.
+
+### Configure release signing and Google Drive
+
+Create a release key once. Keep its keystore and passwords outside Git. Store
+an encrypted backup of the keystore in a separate location and back up the
+password in your password manager. The application ID
+`io.github.jtliang24.podcastapp` and signing key must stay the same for updates.
+[Android app signing](https://developer.android.com/studio/publish/app-signing)
+
+```bash
+keytool -genkeypair -keystore /secure/path/podcast-player.p12 -storetype PKCS12 \
+  -alias podcast-player -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Create a private `keystore.properties` file outside the repository and set
+`PODCAST_SIGNING_PROPERTIES` to that file's absolute path. Set `storeFile`
+to the absolute keystore path or a path relative to the properties file. Set
+`storePassword`, `keyAlias`, and `keyPassword` to the values for that key.
+
+In the same Google Cloud project as the browser OAuth client, enable the Drive
+API and configure the consent screen for
+`https://www.googleapis.com/auth/drive.appdata`. Create an Android OAuth client
+for `io.github.jtliang24.podcastapp` for each signing certificate's SHA-1
+fingerprint. Use `./gradlew signingReport` in `android/` for debug and
+`apksigner verify --print-certs` on the signed APK for release. Add the
+appropriate users to the consent screen's test list while it is in testing.
+[Google authorization on Android](https://developers.google.com/identity/authorization/android)
+
+### Build, verify, and publish a release
+
+Set `versionName` in `android/app/build.gradle` to the release version and
+increment `versionCode` for each published APK. Build and sync with the steps
+above, then build and verify the APK from `android/` with signing configured.
+
+```bash
+./gradlew assembleRelease
+"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+  app/build/outputs/apk/release/app-release.apk
+```
+
+Verify the release-signed APK on a physical phone before publishing.
+
+1. Install the APK and launch it offline. Go online and test iTunes search,
+   public RSS, a private Substack feed, and streaming.
+2. Download two queued episodes and go offline. Start playback, lock the
+   screen, and check play, pause, seeking, and automatic queue advance. Reopen
+   the app and confirm that the current episode and playback position are saved.
+3. Open or create a linked JSON file. Make an edit, restart, and verify the same
+   document receives later updates. Remove the provider's access or move the
+   document through the provider to break its grant, verify the library stays
+   available, then reconnect. Test JSON export and import.
+4. Sync with Drive using the release signing identity. Verify the library and
+   progress in both directions and reconnect after revoking Google access.
+5. Download and install the staged release asset using the phone's package
+   installer. Install a higher-version APK signed by the same release key over
+   it. Confirm subscriptions, progress, document access, and downloads survive.
+
+Name the APK `podcast-player-<version>.apk`. From its directory, run
+`sha256sum podcast-player-<version>.apk > podcast-player-<version>.apk.sha256`.
+Attach both files to the corresponding version tag's repository release and
+include the Android 6.0 minimum and the installation steps below.
+
+On your phone, download the APK from the repository's release page and open it
+with Android's package installer. If prompted, enable **Allow from this
+source** for the browser or file manager you used. A private repository
+requires repository access to download its release assets.
+
 ## 📜 License
 
 This project is licensed under the MIT License.
