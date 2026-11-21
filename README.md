@@ -82,9 +82,10 @@ System WebView or Chrome. Google Drive sync requires Google Play services.
 ### Build a debug APK
 
 Install Node.js 20 or newer, JDK 21, Android SDK Platform 35, and Android SDK
-Build-Tools 35.0.0. Set `JAVA_HOME` and `ANDROID_HOME`, or set `sdk.dir` in
-`android/local.properties`. Capacitor Core, CLI, and Android are pinned to
-7.4.4. The project includes the Gradle 8.11.1 wrapper.
+Build-Tools 34.0.0 and 35.0.0. Set `JAVA_HOME` to the JDK path. Set
+`ANDROID_HOME`, or set `sdk.dir` in `android/local.properties`, to the SDK path.
+Capacitor Core, CLI, and Android are pinned to 7.4.4. The project includes the
+Gradle 8.11.1 wrapper.
 [Capacitor 7 Android setup](https://capacitorjs.com/docs/v7/getting-started/environment-setup)
 
 Run these commands from the repository root.
@@ -188,6 +189,40 @@ On your phone, download the APK from the repository's release page and open it
 with Android's package installer. If prompted, enable **Allow from this
 source** for the browser or file manager you used. A private repository
 requires repository access to download its release assets.
+
+### Build an Android release on GitHub
+
+The [Android release workflow](.github/workflows/android-release.yml) runs on
+version tags such as `v0.1.0`. It tests, builds, signs, and verifies the APK,
+then attaches the APK and its SHA-256 checksum to a draft GitHub release.
+
+Add these repository secrets under **Settings → Secrets and variables →
+Actions**, or set them with the GitHub CLI from the repository root.
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | Base64 of the existing release keystore used to sign updates |
+| `ANDROID_SIGNING_PROPERTIES` | Contents of the local `keystore.properties` with `storePassword`, `keyAlias`, and `keyPassword`. The workflow sets `storeFile` to the decoded keystore. |
+
+```bash
+base64 < /secure/path/podcast-player.p12 | gh secret set ANDROID_KEYSTORE_BASE64
+gh secret set ANDROID_SIGNING_PROPERTIES < /secure/path/keystore.properties
+```
+
+Make sure the version in `package.json` and Android's `versionName` both match
+the tag without the `v`. Increase Android's `versionCode` for each subsequent
+release. Commit and push the workflow and version changes before tagging that
+commit. For the first release, push the version tag with these commands.
+
+```bash
+git tag -a v0.1.0 -m "Podcast Player v0.1.0"
+git push origin v0.1.0
+```
+
+After the workflow succeeds, download the APK from the draft and run the
+physical-device checks above. Review the release notes and publish from
+GitHub. Rerunning the workflow refreshes the assets while the release is a
+draft.
 
 ## 📜 License
 

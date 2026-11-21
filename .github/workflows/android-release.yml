@@ -1,0 +1,136 @@
+name: Android release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions: {}
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify signed APK
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Check the release tag
+        shell: bash
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Expected tag v$version to match package.json."
+            exit 1
+          fi
+
+      - name: Test and bundle the Android app
+        run: |
+          npm ci
+          npm test
+          npm run lint
+          npm run build -- --mode android
+          npx --no-install cap sync android
+
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: zulu
+          java-version: '21'
+
+      - name: Install required Android SDK packages
+        shell: bash
+        run: |
+          if [[ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ||
+                ! -x "$ANDROID_HOME/build-tools/34.0.0/aapt2" ||
+                ! -x "$ANDROID_HOME/build-tools/35.0.0/apksigner" ]]; then
+            sdkmanager --sdk_root="$ANDROID_HOME" --install \
+              'platforms;android-35' 'build-tools;34.0.0' 'build-tools;35.0.0'
+          fi
+
+      - name: Sign the release APK
+        working-directory: android
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_SIGNING_PROPERTIES: ${{ secrets.ANDROID_SIGNING_PROPERTIES }}
+        run: |
+          : "${ANDROID_KEYSTORE_BASE64:?Set the ANDROID_KEYSTORE_BASE64 Actions secret}"
+          : "${ANDROID_SIGNING_PROPERTIES:?Set the ANDROID_SIGNING_PROPERTIES Actions secret}"
+          umask 077
+          signing_dir=$(mktemp -d "$RUNNER_TEMP/podcast-signing.XXXXXX")
+          trap 'rm -rf -- "$signing_dir"' EXIT
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$signing_dir/release.p12"
+          printf '%s\n\nstoreFile=release.p12\n' "$ANDROID_SIGNING_PROPERTIES" > "$signing_dir/keystore.properties"
+          unset ANDROID_KEYSTORE_BASE64 ANDROID_SIGNING_PROPERTIES
+          PODCAST_SIGNING_PROPERTIES="$signing_dir/keystore.properties" ./gradlew --no-daemon assembleRelease
+
+      - name: Verify and prepare the release assets
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          build_tools="$ANDROID_HOME/build-tools/35.0.0"
+          "$build_tools/apksigner" verify --verbose --print-certs "$apk"
+          apk_info=$("$build_tools/aapt" dump badging "$apk")
+          if [[ "$apk_info" != *"versionName='$version'"* ]]; then
+            echo "::error::The APK versionName must match $version."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/android-release"
+          asset="podcast-player-$version.apk"
+          cp "$apk" "$RUNNER_TEMP/android-release/$asset"
+          cd "$RUNNER_TEMP/android-release"
+          sha256sum "$asset" > "$asset.sha256"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-release
+          path: ${{ runner.temp }}/android-release/
+          if-no-files-found: error
+          overwrite: true
+
+  release:
+    name: Attach assets to draft release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android-release
+
+      - name: Create or update the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          asset="podcast-player-${GITHUB_REF_NAME#v}.apk"
+          sha256sum --check "$asset.sha256"
+
+          if is_draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft'); then
+            if [[ "$is_draft" == true ]]; then
+              gh release upload "$GITHUB_REF_NAME" "$asset" "$asset.sha256" --clobber
+            else
+              echo "Release $GITHUB_REF_NAME is already published."
+            fi
+          else
+            gh release create "$GITHUB_REF_NAME" "$asset" "$asset.sha256" \
+              --verify-tag --draft --title "Podcast Player $GITHUB_REF_NAME" --generate-notes \
+              --notes "Requires Android 6.0 or later. Download the APK and open it with Android's package installer. If prompted, allow installs from the app you downloaded it with."
+          fi
