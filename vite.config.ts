@@ -10,6 +10,8 @@ export default defineConfig(({ mode }) => ({
   server: {
     https: {},
     allowedHosts: true,
+    // direnv links entire Nix package sources into the project.
+    watch: { ignored: ['**/.direnv/**'] },
   },
   plugins: [
     substackFeedPlugin,
