@@ -6,8 +6,10 @@ import type { ResumePoint, SyncStatus } from '../services/driveSync';
 import { accessProfile } from '../services/profileStore';
 import { seedProfile } from '../services/profileChanges';
 import type { StateUpdate } from '../services/profileChanges';
+import { AndroidDrive, AndroidFiles, isAndroid } from '../services/android';
+import { searchStateFile } from '../services/driveService';
 
-type StorageMode = 'file-system-access' | 'opfs' | 'google-drive';
+type StorageMode = 'file-system-access' | 'opfs' | 'google-drive' | 'android';
 
 const DB_NAME = 'PodcastFileDB';
 const STORE_NAME = 'handles';
@@ -75,10 +77,14 @@ export function useFileSystem() {
   const [isLoading, setIsLoading] = useState(true);
   const [storageMode, setStorageMode] = useState<StorageMode | null>(() => localStorage.getItem('storageMode') as StorageMode | null);
   const [driveFileId, setDriveFileId] = useState(() => localStorage.getItem('driveFileId'));
-  const [driveToken, setDriveToken] = useState(() => localStorage.getItem('driveAccessToken'));
+  const [driveToken, setDriveToken] = useState(() => isAndroid ? null : localStorage.getItem('driveAccessToken'));
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('Saved on this device');
   const [remoteSession, setRemoteSession] = useState<ResumePoint | null>(null);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [linkedFile, setLinkedFile] = useState(false);
+  const [localLibraryId, setLocalLibraryId] = useState('local');
+  const [reconnectFile, setReconnectFile] = useState(false);
+  const [choosingFile, setChoosingFile] = useState(false);
   const sync = useRef<DriveSync | null>(null);
 
   // Keep state in a ref to always have the latest version for functional updates and I/O
@@ -100,13 +106,25 @@ export function useFileSystem() {
     if (initial) await accessProfile(id, profile => seedProfile(profile, initial));
     if (storageMode !== 'google-drive') setIsLoading(true);
     localStorage.setItem('driveFileId', id);
-    localStorage.setItem('driveAccessToken', token);
+    if (!isAndroid) localStorage.setItem('driveAccessToken', token);
     localStorage.setItem('storageMode', 'google-drive');
     setDriveFileId(id);
     setDriveToken(token);
     setStorageMode('google-drive');
     if (driveToken === token) sync.current?.refresh();
   };
+
+  useEffect(() => {
+    const id = localStorage.getItem('driveFileId');
+    if (!isAndroid || !id || localStorage.getItem('storageMode') !== 'google-drive') return;
+    let cancelled = false;
+    void AndroidDrive.authorize({ interactive: false }).then(async ({ token }) => {
+      if (token && !cancelled && await searchStateFile(token, id) && !cancelled) {
+        setDriveToken(current => current ?? token);
+      }
+    }).catch(() => { /* The cached library is available while authorization is offline. */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const refreshDrive = useCallback(() => sync.current?.refresh(), []);
   useEffect(() => {
@@ -118,7 +136,11 @@ export function useFileSystem() {
     }
     const engine = new DriveSync(driveFileId, driveToken, device, {
       state: publish, remote: setRemoteSession, status: setSyncStatus,
-      expired: () => { localStorage.removeItem('driveAccessToken'); setDriveToken(null); },
+      expired: () => {
+        localStorage.removeItem('driveAccessToken');
+        if (isAndroid && driveToken) void AndroidDrive.clearToken({ token: driveToken }).catch(() => {});
+        setDriveToken(null);
+      },
     });
     sync.current = engine;
     engine.restore().catch(() => setStorageError('Could not open the saved Drive library on this device.'))
@@ -140,7 +162,7 @@ export function useFileSystem() {
   }, [storageMode, driveFileId, driveToken, publish]);
 
   // Check support on mount
-  const isFileSystemAccessSupported = 'showOpenFilePicker' in window;
+  const isFileSystemAccessSupported = !isAndroid && 'showOpenFilePicker' in window;
 
   const loadFromOPFS = useCallback(async () => {
     setIsLoading(true);
@@ -182,10 +204,27 @@ export function useFileSystem() {
 
   // Initialize storage or try to load saved state
   useEffect(() => {
+    let cancelled = false;
     const init = async () => {
       if (localStorage.getItem('storageMode') === 'google-drive' && localStorage.getItem('driveFileId')) return;
 
-      if (!isFileSystemAccessSupported) {
+      if (isAndroid) {
+        try {
+          const stored = await AndroidFiles.readState();
+          if (cancelled) return;
+          if (stored.json) publish({ ...INITIAL_STATE, ...JSON.parse(stored.json) });
+          setLocalLibraryId(stored.id);
+          setLinkedFile(stored.linked);
+          setReconnectFile(stored.reconnect);
+        } catch {
+          if (!cancelled) setStorageError('Could not open the library on this device.');
+        } finally {
+          if (!cancelled) {
+            setStorageMode('android');
+            setIsLoading(false);
+          }
+        }
+      } else if (!isFileSystemAccessSupported) {
         setStorageMode('opfs');
         await loadFromOPFS();
       } else {
@@ -216,7 +255,8 @@ export function useFileSystem() {
     };
 
     init();
-  }, [isFileSystemAccessSupported, loadFromOPFS, loadState]);
+    return () => { cancelled = true; };
+  }, [isFileSystemAccessSupported, loadFromOPFS, loadState, publish]);
 
   const selectFile = useCallback(async () => {
     if (!isFileSystemAccessSupported) return;
@@ -264,13 +304,14 @@ export function useFileSystem() {
   const writes = useRef(Promise.resolve());
   const updateState = useCallback(async (update: StateUpdate, urgent = false) => {
     if (storageMode === 'google-drive') {
-      if (!sync.current) return;
+      if (!sync.current) return false;
       try {
         await sync.current.edit(update, urgent);
         setStorageError(null);
       } catch (error) {
         setStorageError('Could not save this change on this device.');
         console.error(error);
+        return false;
       }
       return;
     }
@@ -278,15 +319,53 @@ export function useFileSystem() {
     // Immediate state update for UI responsiveness
     publish(next);
     // Persist to disk in action order.
-    writes.current = writes.current.then(async () => {
+    const write = writes.current.then(async () => {
       if (storageMode === 'file-system-access' && fileHandle) await saveState(fileHandle, next);
       else if (storageMode === 'opfs') await saveToOPFS(next);
+      else if (storageMode === 'android') {
+        const stored = await AndroidFiles.writeState({ id: localLibraryId, json: JSON.stringify(next, null, 2) });
+        setReconnectFile(stored.reconnect);
+        setStorageError(null);
+      }
     });
-    await writes.current;
-  }, [fileHandle, storageMode, publish]);
+    writes.current = write.catch(() => {});
+    try {
+      await write;
+    } catch {
+      setStorageError('Could not save this change on this device.');
+      return false;
+    }
+  }, [fileHandle, storageMode, localLibraryId, publish]);
+
+  const linkAndroidFile = useCallback(async (action: 'open' | 'create' | 'reconnect') => {
+    setChoosingFile(true);
+    try {
+      await writes.current;
+      const stored = await AndroidFiles.linkState({ action });
+      if ('cancelled' in stored) return;
+      if (action === 'open' && stored.json) publish({ ...INITIAL_STATE, ...JSON.parse(stored.json) });
+      setLocalLibraryId(stored.id);
+      setLinkedFile(stored.linked);
+      setReconnectFile(stored.reconnect);
+      setStorageError(null);
+    } catch {
+      setStorageError('Could not link this JSON file. Choose a writable Podcast Player state file.');
+    } finally {
+      setChoosingFile(false);
+    }
+  }, [publish]);
 
   const exportState = useCallback(async () => {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const json = JSON.stringify(state, null, 2);
+    if (isAndroid) {
+      try {
+        await AndroidFiles.exportFile({ name: 'podcast_state.json', mimeType: 'application/json', content: json });
+      } catch {
+        setStorageError('Could not export your library.');
+      }
+      return;
+    }
+    const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -298,10 +377,12 @@ export function useFileSystem() {
   const importState = useCallback(async (file: File) => {
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text) as AppState;
+      const parsed = JSON.parse(text) as Partial<AppState> | null;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid state file');
       await updateState({ ...INITIAL_STATE, ...parsed });
     } catch (err) {
       console.error('Error importing state:', err);
+      setStorageError('Could not import this JSON file.');
     }
   }, [updateState]);
 
@@ -321,6 +402,11 @@ export function useFileSystem() {
     syncStatus,
     refreshDrive,
     remoteSession,
-    storageError
+    storageError,
+    linkedFile,
+    localLibraryId,
+    reconnectFile,
+    choosingFile,
+    linkAndroidFile,
   };
 }

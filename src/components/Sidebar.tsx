@@ -16,6 +16,12 @@ interface SidebarProps {
   handleExportOPML: () => void;
   handleImportState: (e: React.ChangeEvent<HTMLInputElement>) => void;
   exportState: () => void;
+  androidFileActions?: {
+    linkedFile: boolean;
+    reconnectFile: boolean;
+    choosingFile: boolean;
+    linkAndroidFile: (action: 'open' | 'create' | 'reconnect') => Promise<void>;
+  };
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -28,7 +34,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   handleImportOPML,
   handleExportOPML,
   handleImportState,
-  exportState
+  exportState,
+  androidFileActions,
 }) => {
   return (
     <aside className="h-full w-full md:w-64 border-r border-slate-800 flex flex-col bg-slate-900">
@@ -93,6 +100,19 @@ const Sidebar: React.FC<SidebarProps> = ({
             <span className="text-[10px] font-bold">Export</span>
           </button>
         </div>
+        {androidFileActions && (
+          <div className="mt-2 space-y-2 text-xs text-slate-300">
+            {androidFileActions.reconnectFile ? (
+              <p>File access was lost. Reconnect to write this library to the selected JSON file.</p>
+            ) : androidFileActions.linkedFile && <p role="status">JSON file linked</p>}
+            <div className="flex flex-wrap gap-2">
+              <button className="rounded-lg bg-slate-800 p-2" disabled={androidFileActions.choosingFile}
+                onClick={() => void androidFileActions.linkAndroidFile('open')}>Open and link JSON file</button>
+              <button className="rounded-lg bg-slate-800 p-2" disabled={androidFileActions.choosingFile}
+                onClick={() => void androidFileActions.linkAndroidFile('create')}>Create linked JSON file</button>
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );

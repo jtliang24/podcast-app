@@ -1,6 +1,7 @@
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 import type { Podcast, Episode } from '../types';
 import { isPrivateSubstackFeed, isSubstackHost, substackFeedEndpoint, substackFeedHeader } from './substackFeed.ts';
+import { AndroidHttp, isAndroid } from './android.ts';
 
 const FEED_REQUEST_TIMEOUT_MS = 10_000;
 
@@ -22,12 +23,15 @@ function feedSources(url: URL): { name: string, url: string, request?: RequestIn
   const sources = [{ name: 'Publisher', url: url.href }];
   if (isPrivateSubstackFeed(url)) {
     if (url.protocol !== 'https:') throw new PrivateFeedError('Use the HTTPS link from Substack’s private podcast feed settings.');
+    if (isAndroid) return sources;
     return [...sources, {
       name: 'Substack relay',
       url: substackFeedEndpoint,
       request: { method: 'POST', redirect: 'error', headers: { [substackFeedHeader]: url.href } },
     }];
   }
+
+  if (isAndroid) return sources;
 
   const encodedUrl = encodeURIComponent(url.href);
   const proxyKey = import.meta.env?.VITE_CORSPROXY_KEY?.trim();
@@ -48,17 +52,19 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
   }
 
   const errors: Error[] = [];
+  const privateNative = isAndroid && isPrivateSubstackFeed(url);
   for (const source of feedSources(url)) {
     const controller = new AbortController();
     const relay = source.url === substackFeedEndpoint;
     const timeout = setTimeout(() => controller.abort(), relay ? 30_000 : FEED_REQUEST_TIMEOUT_MS);
     try {
-      const response = await fetch(source.url, {
+      const native = isAndroid ? await AndroidHttp.get({ url: source.url, privateFeed: privateNative }) : null;
+      const response = native ? new Response(native.body || null, { status: native.status }) : await fetch(source.url, {
         ...source.request,
         credentials: 'omit',
         signal: controller.signal,
       });
-      if (relay && [401, 403, 410].includes(response.status)) {
+      if ((relay || privateNative) && [401, 403, 410].includes(response.status)) {
         throw new PrivateFeedError('Substack denied access. Copy your current private podcast feed URL from your subscription settings and try again.');
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -111,6 +117,7 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
       return { podcast, episodes };
     } catch (err) {
       if (err instanceof PrivateFeedError) throw err;
+      if (privateNative) throw new PrivateFeedError('Could not load the private Substack feed. Check your private RSS link and try again.');
       if (relay) throw new PrivateFeedError('Could not load the private Substack feed. Check your private RSS link and that the app’s feed relay is available.');
       errors.push(new Error(
         `${source.name}: ${controller.signal.aborted ? 'Request timed out' : err instanceof Error ? err.message : 'Request failed'}`,
@@ -142,8 +149,10 @@ function parseDuration(duration: string): number {
 
 export async function searchPodcasts(query: string): Promise<Podcast[]> {
   try {
-    const response = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=podcast&limit=15`);
-    const data = await response.json();
+    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=podcast&limit=15`;
+    const response = isAndroid ? await AndroidHttp.get({ url }) : await fetch(url);
+    if (response.status !== 200) throw new Error('Podcast search failed');
+    const data = 'json' in response ? await response.json() : JSON.parse(response.body);
     return data.results.map((item: { feedUrl: string, collectionName: string, artistName: string, artworkUrl600?: string, artworkUrl100?: string }) => ({
       id: item.feedUrl,
       title: item.collectionName,

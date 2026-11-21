@@ -5,7 +5,8 @@ import mkcert from 'vite-plugin-mkcert'
 import { substackFeedPlugin } from './server/substackFeed'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  envPrefix: mode === 'android' ? 'VITE_ANDROID_' : 'VITE_',
   server: {
     https: {},
     allowedHosts: true,
@@ -17,6 +18,7 @@ export default defineConfig({
       hosts: ['localhost', '127.0.0.1', '192.168.1.153', '192.168.1.153.sslip.io'],
     }),
     VitePWA({
+      disable: mode === 'android',
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icons.svg'],
       manifest: {
@@ -42,5 +44,5 @@ export default defineConfig({
   define: {
     'process.env': {},
   }
-})
+}))
 

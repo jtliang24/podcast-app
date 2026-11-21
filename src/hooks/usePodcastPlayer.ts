@@ -5,13 +5,19 @@ import { resumePoint } from '../services/driveSync';
 import type { ResumePoint } from '../services/driveSync';
 import type { StateUpdate } from '../services/profileChanges';
 
-interface UsePodcastPlayerProps {
+export interface UsePodcastPlayerProps {
+  profile: string;
   state: AppState;
   ready: boolean;
-  updateState: (update: StateUpdate, urgent?: boolean) => Promise<void>;
+  updateState: (update: StateUpdate, urgent?: boolean) => Promise<void | boolean>;
   downloadedEpisodes: Episode[];
   downloadsReady: boolean;
   remoteSession: ResumePoint | null;
+}
+
+export function formatTime(time: number) {
+  if (!Number.isFinite(time)) return '0:00';
+  return `${Math.floor(time / 60)}:${Math.floor(time % 60).toString().padStart(2, '0')}`;
 }
 
 interface Selection extends ResumePoint {
@@ -301,11 +307,6 @@ export function usePodcastPlayer({
       setIsPlaying(false);
       setPlaybackError(true);
     }
-  };
-
-  const formatTime = (time: number) => {
-    if (!Number.isFinite(time)) return '0:00';
-    return `${Math.floor(time / 60)}:${Math.floor(time % 60).toString().padStart(2, '0')}`;
   };
 
   return {

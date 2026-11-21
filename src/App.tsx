@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useGoogleLogin } from '@react-oauth/google';
+import { useDriveLogin } from './hooks/useDriveLogin';
 import { searchStateFile, createStateFile } from './services/driveService';
 import { useFileSystem } from './hooks/useFileSystem';
 import { usePodcastPlayer } from './hooks/usePodcastPlayer';
+import { useAndroidPodcastPlayer } from './hooks/useAndroidPodcastPlayer';
+import { AndroidFiles, isAndroid } from './services/android';
 import { fetchPodcastFeed, PrivateFeedError, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
-import { saveDownload, getAllDownloadedEpisodes, deleteDownload } from './services/storageService';
+import { downloadEpisode, getAllDownloadedEpisodes, deleteDownload } from './services/storageService';
 import type { Podcast, Episode, SortOrder, AppState } from './types';
 import { Loader2, FolderOpen, Plus, Cloud } from 'lucide-react';
 import { INITIAL_STATE } from './types';
@@ -19,13 +21,17 @@ import PodcastView from './components/PodcastView';
 import SearchResultsView from './components/SearchResultsView';
 import EpisodeDescriptionView from './components/EpisodeDescriptionView';
 
+const usePlayer = isAndroid ? useAndroidPodcastPlayer : usePodcastPlayer;
+
 export default function App() {
   const storage = useFileSystem();
+  const profile = storage.driveFileId && storage.storageMode === 'google-drive'
+    ? `drive:${storage.driveFileId}` : `${storage.storageMode}:${storage.localLibraryId}`;
   // A storage switch starts a new player. Reconnecting the same library keeps its audio element.
-  return <Library key={storage.storageMode + (storage.driveFileId ?? '')} storage={storage} />;
+  return <Library key={profile} profile={profile} storage={storage} />;
 }
 
-function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
+function Library({ storage, profile }: { storage: ReturnType<typeof useFileSystem>; profile: string }) {
   const { 
     state, 
     fileHandle, 
@@ -42,26 +48,29 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
     syncStatus,
     storageError,
     remoteSession,
-    refreshDrive
+    refreshDrive,
+    linkedFile,
+    reconnectFile,
+    choosingFile,
+    linkAndroidFile,
   } = storage;
 
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [driveLoadingMessage, setDriveLoadingMessage] = useState<string | null>(null);
 
-  const loginWithGoogle = useGoogleLogin({
-    scope: 'https://www.googleapis.com/auth/drive.appdata',
-    onSuccess: async (tokenResponse) => {
+  const loginWithGoogle = useDriveLogin({
+    onSuccess: async (token) => {
       setDriveLoadingMessage('Searching for state file...');
       try {
         const expected = storageMode === 'google-drive' ? driveFileId : null;
-        const fileId = await searchStateFile(tokenResponse.access_token, expected);
+        const fileId = await searchStateFile(token, expected);
         if (fileId) {
-          await connectDrive(tokenResponse.access_token, fileId);
+          await connectDrive(token, fileId);
         } else if (expected) {
           alert('Reconnect with the Google account that owns this library.');
         } else {
           // File not found, enter setup phase
-          setSetupToken(tokenResponse.access_token);
+          setSetupToken(token);
         }
       } catch (err) {
         console.error('Drive Error:', err);
@@ -71,7 +80,7 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
       }
     },
     onError: () => {
-      console.error('Google Login Failed');
+      alert('Failed to authorize Google Drive.');
     },
   });
 
@@ -133,24 +142,26 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
   const attemptedDownloads = useRef(new Set<string>());
   const [downloadedEpisodes, setDownloadedEpisodes] = useState<Episode[]>([]);
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
+  const activeDownloads = useRef(new Set<string>());
 
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [importingStatus, setImportingStatus] = useState<string | null>(null);
 
   // Download Management
-  const handleDownload = useCallback(async (episode: Episode) => {
+  const handleDownload = useCallback(async (episode: Episode, automatic = false) => {
+    if (activeDownloads.current.has(episode.id)) return;
+    activeDownloads.current.add(episode.id);
     setDownloadingIds(prev => new Set(prev).add(episode.id));
     try {
-      const res = await fetch(episode.audioUrl);
-      if (!res.ok) throw new Error('Network response was not ok');
-      const blob = await res.blob();
-      await saveDownload(episode, blob);
+      await downloadEpisode(episode);
       const newDeps = await getAllDownloadedEpisodes();
       setDownloadedEpisodes(newDeps);
     } catch (err) {
       console.error('Download failed', err);
+      if (!automatic) setError('Could not download this episode.');
     } finally {
+      activeDownloads.current.delete(episode.id);
       setDownloadingIds(prev => {
         const next = new Set(prev);
         next.delete(episode.id);
@@ -160,9 +171,12 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
   }, []);
 
   const handleDeleteDownload = useCallback(async (episodeId: string) => {
-    await deleteDownload(episodeId);
-    const newDeps = await getAllDownloadedEpisodes();
-    setDownloadedEpisodes(newDeps);
+    try {
+      await deleteDownload(episodeId);
+      setDownloadedEpisodes(await getAllDownloadedEpisodes());
+    } catch {
+      setError('Could not delete this download.');
+    }
   }, []);
 
   // Played State Logic
@@ -205,8 +219,8 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
     handleSeek,
     formatTime,
     playEpisode
-  } = usePodcastPlayer({
-    state,
+  } = usePlayer({
+    state, profile,
     ready: !isLoading && !setupToken && (!isFileSystemAccessSupported || !!fileHandle || storageMode === 'google-drive'),
     updateState, downloadedEpisodes, downloadsReady, remoteSession,
   });
@@ -549,7 +563,7 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
     );
     if (nextToDownload) {
       attemptedDownloads.current.add(nextToDownload.id);
-      handleDownload(nextToDownload);
+      void handleDownload(nextToDownload, true);
     }
   }, [state.queue, downloadedEpisodes, downloadingIds, handleDownload, downloadsReady, online]);
 
@@ -593,6 +607,11 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
 
   const handleExportOPML = () => {
     const opml = generateOPML(state.subscriptions);
+    if (isAndroid) {
+      void AndroidFiles.exportFile({ name: 'subscriptions.opml', mimeType: 'text/xml', content: opml })
+        .catch(() => setError('Could not export your subscriptions.'));
+      return;
+    }
     const blob = new Blob([opml], { type: 'text/xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -679,6 +698,7 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
           handleExportOPML={handleExportOPML}
           handleImportState={handleImportState}
           exportState={exportState}
+          androidFileActions={storageMode === 'android' ? { linkedFile, reconnectFile, choosingFile, linkAndroidFile } : undefined}
         />
       </div>
       <main className="min-w-0 flex-1 flex flex-col pb-44 md:pb-32 overflow-hidden">
@@ -695,6 +715,11 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
             </>
           )}
           {storageError && <span role="alert" className="text-red-300">{storageError}</span>}
+          {storageMode === 'android' && reconnectFile && (
+            <button className="text-amber-300" disabled={choosingFile} onClick={() => void linkAndroidFile('reconnect')}>
+              Reconnect JSON file
+            </button>
+          )}
         </div>
         {offer && (hasRemoteOffer || (!isPlaying && viewMode === 'search' && !selectedPodcast && !selectedEpisode && !searchResults.length)) && (
           <section className="mx-4 mt-4 rounded-2xl border border-slate-700 bg-slate-900 p-4 md:mx-6">
@@ -818,12 +843,12 @@ function Library({ storage }: { storage: ReturnType<typeof useFileSystem> }) {
         reorderQueue={reorderQueue}
         removeFromQueue={removeFromQueue}
       />
-      <audio 
+      {!isAndroid && <audio
         ref={audioRef} 
         preload="metadata"
         {...audioEvents}
         className="hidden" 
-      />
+      />}
     </div>
   );
 }

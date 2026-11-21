@@ -1,4 +1,5 @@
 import type { Episode } from '../types';
+import { AndroidDownloads, isAndroid } from './android';
 
 const DB_NAME = 'podcast_downloads';
 const DB_VERSION = 1;
@@ -25,7 +26,14 @@ function initDB(): Promise<IDBDatabase> {
   });
 }
 
-export async function saveDownload(episode: Episode, audioBlob: Blob): Promise<void> {
+export async function downloadEpisode(episode: Episode): Promise<void> {
+  if (isAndroid) return AndroidDownloads.download({ episode });
+  const response = await fetch(episode.audioUrl);
+  if (!response.ok) throw new Error('Episode download failed');
+  await saveDownload(episode, await response.blob());
+}
+
+async function saveDownload(episode: Episode, audioBlob: Blob): Promise<void> {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite');
@@ -45,6 +53,7 @@ export async function saveDownload(episode: Episode, audioBlob: Blob): Promise<v
 }
 
 export async function getAllDownloadedEpisodes(): Promise<Episode[]> {
+  if (isAndroid) return (await AndroidDownloads.list()).episodes;
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readonly');
@@ -76,6 +85,7 @@ export async function getAudioBlob(episodeId: string): Promise<Blob | null> {
 }
 
 export async function deleteDownload(episodeId: string): Promise<void> {
+  if (isAndroid) return AndroidDownloads.remove({ id: episodeId });
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite');

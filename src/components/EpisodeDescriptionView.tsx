@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useMemo } from 'react';
+import DOMPurify from 'dompurify';
 import { 
   Play, Pause, ArrowLeft, Plus, 
   ArrowDownToLine, Loader2, CheckCircle2, Clock, Calendar
@@ -30,6 +31,11 @@ const EpisodeDescriptionView: React.FC<EpisodeDescriptionViewProps> = ({
   onDeleteDownload,
   downloadStatus
 }) => {
+  const description = useMemo(() => DOMPurify.sanitize(episode.description, {
+    ALLOWED_TAGS: ['p', 'br', 'div', 'span', 'a', 'img', 'b', 'strong', 'i', 'em', 'u', 's', 'hr',
+      'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+    ALLOWED_ATTR: ['href', 'src', 'alt', 'title'],
+  }), [episode.description]);
   const dateStr = new Date(episode.pubDate).toLocaleDateString(undefined, {
     weekday: 'long',
     year: 'numeric',
@@ -152,7 +158,7 @@ const EpisodeDescriptionView: React.FC<EpisodeDescriptionViewProps> = ({
 
         <div 
           className="text-slate-400 leading-relaxed space-y-4 episode-description"
-          dangerouslySetInnerHTML={{ __html: episode.description }}
+          dangerouslySetInnerHTML={{ __html: description }}
         />
       </div>
     </div>
