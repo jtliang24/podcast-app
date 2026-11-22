@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import type { AppState } from '../types';
 import { INITIAL_STATE } from '../types';
 import { DriveSync } from '../services/driveSync';
-import type { ResumePoint, SyncStatus } from '../services/driveSync';
+import type { ResumePoint, SyncNetwork, SyncStatus } from '../services/driveSync';
 import { accessProfile } from '../services/profileStore';
 import { seedProfile } from '../services/profileChanges';
 import type { StateUpdate } from '../services/profileChanges';
@@ -71,7 +71,7 @@ const saveState = async (handle: FileSystemFileHandle, newState: AppState) => {
   }
 };
 
-export function useFileSystem() {
+export function useFileSystem(network: SyncNetwork) {
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [state, setState] = useState<AppState>(INITIAL_STATE);
   const [isLoading, setIsLoading] = useState(true);
@@ -86,6 +86,19 @@ export function useFileSystem() {
   const [reconnectFile, setReconnectFile] = useState(false);
   const [choosingFile, setChoosingFile] = useState(false);
   const sync = useRef<DriveSync | null>(null);
+  const syncEnvironment = useRef({ network, playing: false });
+  const updateSyncEnvironment = useCallback(() => {
+    const { network, playing } = syncEnvironment.current;
+    sync.current?.setEnvironment(network, document.visibilityState === 'visible', playing);
+  }, []);
+  const setSyncPlayback = useCallback((playing: boolean) => {
+    syncEnvironment.current.playing = playing;
+    updateSyncEnvironment();
+  }, [updateSyncEnvironment]);
+  useEffect(() => {
+    syncEnvironment.current.network = network;
+    updateSyncEnvironment();
+  }, [network, updateSyncEnvironment]);
 
   // Keep state in a ref to always have the latest version for functional updates and I/O
   const stateRef = useRef<AppState>(state);
@@ -143,23 +156,19 @@ export function useFileSystem() {
       },
     });
     sync.current = engine;
+    updateSyncEnvironment();
     engine.restore().catch(() => setStorageError('Could not open the saved Drive library on this device.'))
       .finally(() => { if (sync.current === engine) setIsLoading(false); });
-    const refresh = () => engine.refresh();
-    const foreground = () => { if (document.visibilityState === 'visible') refresh(); };
-    window.addEventListener('online', refresh);
-    window.addEventListener('offline', refresh);
+    const foreground = () => { if (document.visibilityState === 'visible') engine.refresh(); };
     window.addEventListener('focus', foreground);
-    document.addEventListener('visibilitychange', foreground);
+    document.addEventListener('visibilitychange', updateSyncEnvironment);
     return () => {
       engine.stop();
       sync.current = null;
-      window.removeEventListener('online', refresh);
-      window.removeEventListener('offline', refresh);
       window.removeEventListener('focus', foreground);
-      document.removeEventListener('visibilitychange', foreground);
+      document.removeEventListener('visibilitychange', updateSyncEnvironment);
     };
-  }, [storageMode, driveFileId, driveToken, publish]);
+  }, [storageMode, driveFileId, driveToken, publish, updateSyncEnvironment]);
 
   // Check support on mount
   const isFileSystemAccessSupported = !isAndroid && 'showOpenFilePicker' in window;
@@ -302,11 +311,11 @@ export function useFileSystem() {
   }, [isFileSystemAccessSupported, publish]);
 
   const writes = useRef(Promise.resolve());
-  const updateState = useCallback(async (update: StateUpdate, urgent = false) => {
+  const updateState = useCallback(async (update: StateUpdate, urgent = false, routine = false) => {
     if (storageMode === 'google-drive') {
       if (!sync.current) return false;
       try {
-        await sync.current.edit(update, urgent);
+        await sync.current.edit(update, urgent, routine);
         setStorageError(null);
       } catch (error) {
         setStorageError('Could not save this change on this device.');
@@ -401,6 +410,7 @@ export function useFileSystem() {
     driveFileId,
     syncStatus,
     refreshDrive,
+    setSyncPlayback,
     remoteSession,
     storageError,
     linkedFile,

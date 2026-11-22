@@ -40,7 +40,7 @@ export function useAndroidPodcastPlayer({
       setConnectionError(false);
       if (saving.current || !snapshot.changes.length) return;
       saving.current = true;
-      void storage.current.updateState(previous => applyAndroidPlayback(previous, snapshot), snapshot.urgent)
+      void storage.current.updateState(previous => applyAndroidPlayback(previous, snapshot), snapshot.urgent, !snapshot.urgent)
         .then(async saved => {
           if (saved !== false && active.current) {
             await AndroidPlayback.control({ profile, action: 'acknowledge', revision: snapshot.revision });

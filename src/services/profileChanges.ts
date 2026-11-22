@@ -1,5 +1,7 @@
 import { INITIAL_STATE } from '../types.ts';
-import type { AppState, Podcast } from '../types.ts';
+import type { AppState, Episode, Podcast } from '../types.ts';
+
+export const routineUploadInterval = 30_000;
 
 const maps = [
   'playbackProgress', 'podcastSortOrders', 'playedEpisodes', 'hidePlayedEpisodes',
@@ -15,6 +17,8 @@ type ScalarField = typeof fields[number];
 
 type Change =
   | { field: 'subscriptions'; key: string; value?: Podcast }
+  | { field: 'episodeMetadata'; key: string; value: Episode }
+  | { field: 'sessionUrl'; key?: never; value: string }
   | { [K in MapField]: { field: K; key: string; value?: NonNullable<AppState[K]>[string] } }[MapField]
   | { [K in ScalarField]: { field: K; key?: never; value?: AppState[K] } }[ScalarField];
 
@@ -35,7 +39,15 @@ export interface Profile {
   clock: number;
   versions: Record<string, Stamp>;
   applied: Record<string, true>;
-  pending: { batch: Batch; urgent: boolean; fileId?: string }[];
+  pending: { batch: Batch; urgent: boolean; fileId?: string; checkpoint?: string; due?: number }[];
+  episodes?: Record<string, Episode>;
+  sessionUrl?: string;
+  lastCheckpointUpload?: Record<string, number>;
+  fileIds?: string[];
+  feed?: { token: string; scanPage?: string };
+  lastPull?: number;
+  pullLease?: { owner: string; until: number };
+  pullRetryAt?: number;
 }
 
 export function newProfile(snapshot?: Partial<AppState>): Profile {
@@ -53,7 +65,7 @@ function diffEntries<K extends MapField | 'subscriptions'>(
   }
 }
 
-export function recordEdit(profile: Profile, update: StateUpdate, device: string, urgent = false, now = Date.now()) {
+export function recordEdit(profile: Profile, update: StateUpdate, device: string, urgent = false, now = Date.now(), routine = false) {
   const before = profile.state;
   const after = typeof update === 'function' ? update(before) : update;
   const changes: Change[] = [];
@@ -68,12 +80,39 @@ export function recordEdit(profile: Profile, update: StateUpdate, device: string
     // Stamp the session pointer with its checkpoint even when the episode is unchanged.
     const url = after.lastPlayingEpisode?.audioUrl;
     const checkpoint = field === 'lastPlayingEpisode' && url && after.playbackProgress[url] !== before.playbackProgress[url];
-    if (before[field] !== after[field] || checkpoint) changes.push({ field, value: after[field] } as Change);
+    if (field === 'lastPlayingEpisode' && after.lastPlayingEpisode && (before[field] !== after[field] || checkpoint)) {
+      const episode = after.lastPlayingEpisode;
+      const cached = profile.episodes?.[episode.audioUrl];
+      if (cached !== episode && JSON.stringify(cached) !== JSON.stringify(episode)) {
+        changes.push({ field: 'episodeMetadata', key: episode.audioUrl, value: episode });
+      }
+      changes.push({ field: 'sessionUrl', value: episode.audioUrl });
+    } else if (before[field] !== after[field] || checkpoint) {
+      changes.push({ field, value: after[field] } as Change);
+    }
   }
   if (changes.length) {
     const batch = { id: crypto.randomUUID(), changes, device, time: Math.max(now, profile.clock + 1) };
     applyBatch(profile, batch);
-    profile.pending.push({ batch, urgent });
+    const url = after.lastPlayingEpisode?.audioUrl;
+    const progress = changes.find(change => change.field === 'playbackProgress');
+    const checkpoint = progress?.value && progress.key === url ? url : undefined;
+    const routineOnly = routine && !urgent && checkpoint && changes.every(change =>
+      change.field === 'playbackProgress' && change.key === checkpoint
+      || change.field === 'episodeMetadata' || change.field === 'sessionUrl');
+    if (checkpoint && (routineOnly || urgent)) {
+      const previous = profile.pending.find(entry => entry.checkpoint === checkpoint && entry.due !== undefined && !entry.fileId);
+      if (previous) {
+        const metadata = previous.batch.changes.find(change => change.field === 'episodeMetadata');
+        if (metadata && !changes.some(change => change.field === 'episodeMetadata')) changes.unshift(metadata);
+        profile.pending = profile.pending.filter(entry => entry !== previous);
+      }
+      const lastUpload = profile.lastCheckpointUpload?.[checkpoint] ?? now;
+      const due = routineOnly ? previous?.due ?? Math.max(now, lastUpload + routineUploadInterval) : undefined;
+      profile.pending.push({ batch, urgent, checkpoint, due });
+    } else {
+      profile.pending.push({ batch, urgent });
+    }
   }
 }
 
@@ -81,6 +120,7 @@ export function coalescePlaybackCheckpoints(profile: Profile) {
   const latest = new Map<string, Profile['pending'][number]>();
   // Each newer checkpoint for an episode replaces both fields of its older checkpoints.
   profile.pending = profile.pending.slice().reverse().filter(entry => {
+    if (entry.fileId) return true;
     const { changes } = entry.batch;
     if (changes.length !== 2) return true;
     const progress = changes.find(change => change.field === 'playbackProgress');
@@ -102,12 +142,23 @@ export function applyBatch(profile: Profile, batch: Batch) {
   const { time, device } = batch;
   const copied = new Set<MapField>();
   for (const change of batch.changes) {
-    const path = JSON.stringify([change.field, change.key]);
+    const field = change.field === 'sessionUrl' ? 'lastPlayingEpisode' : change.field;
+    if (change.field === 'lastPlayingEpisode' && change.value) {
+      applyEpisodeMetadata(profile, change.value, time, device);
+    }
+    const path = JSON.stringify([field, change.key]);
     const previous = profile.versions[path];
     if (previous && (previous.time > time || (previous.time === time && previous.device >= device))) continue;
     profile.versions[path] = { time, device };
     const { state } = profile;
-    if (change.field === 'subscriptions') {
+    if (change.field === 'episodeMetadata') {
+      (profile.episodes ??= {})[change.key] = change.value;
+    } else if (change.field === 'sessionUrl') {
+      profile.sessionUrl = change.value;
+    } else if (change.field === 'lastPlayingEpisode') {
+      profile.sessionUrl = change.value?.audioUrl;
+      state.lastPlayingEpisode = change.value;
+    } else if (change.field === 'subscriptions') {
       const items = state.subscriptions.filter(p => p.feedUrl !== change.key);
       if (change.value) items.push(change.value);
       state.subscriptions = items.sort((a, b) => a.feedUrl.localeCompare(b.feedUrl, 'en'));
@@ -123,15 +174,29 @@ export function applyBatch(profile: Profile, batch: Batch) {
       Object.assign(state, { [change.field]: change.value });
     }
   }
+  if (profile.sessionUrl) {
+    const url = profile.sessionUrl;
+    const episode = profile.episodes?.[url] ?? profile.state.queue.find(item => item.audioUrl === url)
+      ?? profile.state.newReleases.find(item => item.audioUrl === url);
+    profile.state.lastPlayingEpisode = episode ?? (profile.state.lastPlayingEpisode?.audioUrl === url
+      ? profile.state.lastPlayingEpisode : null);
+  }
   profile.clock = Math.max(profile.clock, time);
   profile.applied[batch.id] = true;
+}
+
+function applyEpisodeMetadata(profile: Profile, episode: Episode, time: number, device: string) {
+  const path = JSON.stringify(['episodeMetadata', episode.audioUrl]);
+  const previous = profile.versions[path];
+  if (previous && (previous.time > time || (previous.time === time && previous.device >= device))) return;
+  profile.versions[path] = { time, device };
+  (profile.episodes ??= {})[episode.audioUrl] = episode;
 }
 
 // On a first offline launch, edits can precede the initial snapshot download.
 export function seedProfile(profile: Profile, snapshot: Partial<AppState>) {
   if (profile.seeded) return profile;
-  const seeded = newProfile(snapshot);
-  seeded.pending = profile.pending;
+  const seeded = { ...profile, ...newProfile(snapshot), episodes: undefined, sessionUrl: undefined, pending: profile.pending };
   for (const { batch } of seeded.pending) applyBatch(seeded, batch);
   return seeded;
 }

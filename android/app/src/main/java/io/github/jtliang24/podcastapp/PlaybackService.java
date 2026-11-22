@@ -175,6 +175,7 @@ public class PlaybackService extends MediaSessionService {
                 case "select":
                     checkpoint(true);
                     select(Track.from(options.getJSONObject("track")), options.optBoolean("autoplay"));
+                    if (current != null) record(current, position(), length(), false, true);
                     break;
                 case "toggle":
                     toggle();

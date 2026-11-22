@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react';
 import { AndroidConnectivity, isAndroid } from '../services/android';
 import type { DownloadConnection } from '../services/android';
+import type { SyncNetwork } from '../services/driveSync';
+
+export function syncNetwork(connection: DownloadConnection | null): SyncNetwork {
+  if (connection?.transport === 'offline' || (!connection && !navigator.onLine)) return 'offline';
+  if (connection?.transport === 'other' && (isAndroid || connection.id === 'wifi' || connection.id === 'ethernet')) {
+    return 'unmetered';
+  }
+  return 'limited';
+}
 
 function browserConnection() {
   return (navigator as Navigator & { connection?: EventTarget & { type?: string } }).connection;

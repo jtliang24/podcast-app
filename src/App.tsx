@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useDriveLogin } from './hooks/useDriveLogin';
 import { searchStateFile, createStateFile } from './services/driveService';
 import { useFileSystem } from './hooks/useFileSystem';
+import { syncNetwork, useDownloadConnection } from './hooks/useDownloadConnection';
+import type { DownloadConnection } from './services/android';
 import { usePodcastPlayer } from './hooks/usePodcastPlayer';
 import { useAndroidPodcastPlayer } from './hooks/useAndroidPodcastPlayer';
 import { useDownloadPolicy, useDownloadStorage } from './hooks/useDownloads';
@@ -29,18 +31,20 @@ import DownloadConfirmation from './components/DownloadConfirmation';
 const usePlayer = isAndroid ? useAndroidPodcastPlayer : usePodcastPlayer;
 
 export default function App() {
-  const storage = useFileSystem();
+  const connection = useDownloadConnection();
+  const storage = useFileSystem(syncNetwork(connection));
   const downloads = useDownloadStorage();
   const profile = storage.driveFileId && storage.storageMode === 'google-drive'
     ? `drive:${storage.driveFileId}` : `${storage.storageMode}:${storage.localLibraryId}`;
   // A storage switch starts a new player. Reconnecting the same library keeps its audio element.
-  return <Library key={profile} profile={profile} storage={storage} downloads={downloads} />;
+  return <Library key={profile} profile={profile} storage={storage} downloads={downloads} connection={connection} />;
 }
 
-function Library({ storage, profile, downloads }: {
+function Library({ storage, profile, downloads, connection }: {
   storage: ReturnType<typeof useFileSystem>;
   profile: string;
   downloads: ReturnType<typeof useDownloadStorage>;
+  connection: DownloadConnection | null;
 }) {
   const { 
     state, 
@@ -59,6 +63,7 @@ function Library({ storage, profile, downloads }: {
     storageError,
     remoteSession,
     refreshDrive,
+    setSyncPlayback,
     linkedFile,
     reconnectFile,
     choosingFile,
@@ -162,7 +167,7 @@ function Library({ storage, profile, downloads }: {
 
   // Download Management
   const { requestDownload: handleDownload, confirmation, answerConfirmation } = useDownloadPolicy({
-    ready, queue: state.queue, preferences, storage: downloads, onError: setDownloadError,
+    connection, ready, queue: state.queue, preferences, storage: downloads, onError: setDownloadError,
   });
 
   const handleDeleteDownload = useCallback(async (episodeId: string) => {
@@ -217,6 +222,10 @@ function Library({ storage, profile, downloads }: {
     state, profile, ready, skipBackwardSeconds, skipForwardSeconds,
     updateState, downloadedEpisodes, downloadsReady, remoteSession,
   });
+  useEffect(() => {
+    setSyncPlayback(isPlaying);
+    return () => setSyncPlayback(false);
+  }, [isPlaying, setSyncPlayback]);
 
   // Keyboard Shortcuts
   useEffect(() => {

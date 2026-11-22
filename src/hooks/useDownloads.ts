@@ -3,7 +3,6 @@ import { deleteDownload, downloadEpisode, getAllDownloadedEpisodes } from '../se
 import type { DownloadConnection } from '../services/android';
 import type { Preferences } from '../services/preferences';
 import type { Episode } from '../types';
-import { useDownloadConnection } from './useDownloadConnection';
 
 export function useDownloadStorage() {
   const [downloadsReady, setDownloadsReady] = useState(false);
@@ -50,6 +49,7 @@ interface DownloadRequest {
 }
 
 interface DownloadPolicyOptions {
+  connection: DownloadConnection | null;
   ready: boolean;
   queue: Episode[];
   preferences: Preferences;
@@ -57,10 +57,9 @@ interface DownloadPolicyOptions {
   onError: (message: string | null) => void;
 }
 
-export function useDownloadPolicy({ ready, queue, preferences, storage, onError }: DownloadPolicyOptions) {
+export function useDownloadPolicy({ connection, ready, queue, preferences, storage, onError }: DownloadPolicyOptions) {
   const { cellularDownload, autoDownloadQueued } = preferences;
   const { downloadsReady, downloadedEpisodes, downloadingIds, startDownload } = storage;
-  const connection = useDownloadConnection();
   const [visible, setVisible] = useState(document.visibilityState === 'visible');
   const [dialogClosures, setDialogClosures] = useState(0);
   const [pending, setPending] = useState<DownloadRequest | null>(null);

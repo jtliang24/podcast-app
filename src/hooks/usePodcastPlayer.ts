@@ -12,7 +12,7 @@ export interface UsePodcastPlayerProps {
   ready: boolean;
   skipBackwardSeconds: SkipInterval;
   skipForwardSeconds: SkipInterval;
-  updateState: (update: StateUpdate, urgent?: boolean) => Promise<void | boolean>;
+  updateState: (update: StateUpdate, urgent?: boolean, routine?: boolean) => Promise<void | boolean>;
   downloadedEpisodes: Episode[];
   downloadsReady: boolean;
   remoteSession: ResumePoint | null;
@@ -58,7 +58,7 @@ export function usePodcastPlayer({
     const time = seekTime ?? audio.currentTime;
     item.time = time;
     const progress = {
-      episodeUrl, currentTime: time, duration: Number.isFinite(audio.duration) ? audio.duration : episode.duration,
+      episodeUrl, currentTime: time, duration: item.positioned && Number.isFinite(audio.duration) ? audio.duration : episode.duration,
       lastUpdated: Date.now(),
     };
     // Ensure currently playing episode is at the top of the queue and save lastPlayingEpisode
@@ -69,7 +69,7 @@ export function usePodcastPlayer({
         : prev.podcastLastPlayed,
       queue: enqueue && prev.queue[0]?.id !== episode.id
         ? [episode, ...prev.queue.filter(e => e.id !== episode.id)] : prev.queue,
-    }), urgent);
+    }), urgent, !urgent);
   }, [updateState]);
 
   const requestPlay = useCallback(() => {
@@ -97,6 +97,7 @@ export function usePodcastPlayer({
     setCurrentTime(time);
     setDuration(episode.duration || 0);
     setPlaybackError(false);
+    if (autoplay && old?.episode.audioUrl !== episode.audioUrl) checkpoint(true, false, time);
 
     // Preload audio metadata and saved position. A cold offline launch may precede the download list.
     const attach = (blob: Blob | null) => {

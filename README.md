@@ -7,7 +7,7 @@ A modern, local-first podcast listening application designed for privacy, portab
 - **🚀 Local-First Architecture**: Local profiles use a JSON file. Drive profiles cache subscriptions, preferences, and listening progress in IndexedDB.
 - **☁️ Cloud Sync**: Drive keeps the original profile as a starting snapshot and syncs subsequent edits through its private app-data folder. Pending edits survive offline use and reconnecting to the same account.
 - **📥 Offline Listening**: Download episodes directly to your browser's IndexedDB for playback without an internet connection.
-- **🔄 Session Continuity**: Pause on one device and choose **Continue listening** on another to resume at the saved position. Update both devices before using handoff.
+- **🔄 Session Continuity**: Pause on one device and choose **Continue listening** on another to resume at the saved position. A visible, paused receiver checks for updates every 15 seconds on Wi-Fi or Ethernet. On cellular or when the connection type is unknown, reopen the app, return to it, or use **Refresh sync**. Update all devices that share the library before using handoff.
 - **📱 PWA Support**: Installable on Desktop and Mobile for a native-like experience.
 - **🎵 System Integration**: Full support for the Media Session API, allowing control via lock screens, hardware buttons, and system media widgets.
 - **📑 OPML Support**: Easily import or export your podcast subscriptions using standard OPML files.
