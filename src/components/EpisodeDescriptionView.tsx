@@ -1,10 +1,11 @@
 import React, { useMemo } from 'react';
 import DOMPurify from 'dompurify';
 import { 
-  Play, Pause, ArrowLeft, Plus, 
+  Play, Pause, ArrowLeft,
   ArrowDownToLine, Loader2, CheckCircle2, Clock, Calendar
 } from 'lucide-react';
-import type { Episode, Podcast } from '../types';
+import type { Episode, Podcast, QueueEpisode } from '../types';
+import EpisodeQueueActions from './EpisodeQueueActions';
 
 interface EpisodeDescriptionViewProps {
   episode: Episode;
@@ -13,7 +14,7 @@ interface EpisodeDescriptionViewProps {
   onPlay: (e: Episode) => void;
   isCurrent: boolean;
   isPlaying: boolean;
-  onAddToQueue: (e: Episode, position: 'top' | 'bottom') => void;
+  onAddToQueue: QueueEpisode;
   onDownload: (e: Episode) => void;
   onDeleteDownload: (id: string) => void;
   downloadStatus: 'none' | 'downloading' | 'downloaded';
@@ -108,13 +109,10 @@ const EpisodeDescriptionView: React.FC<EpisodeDescriptionViewProps> = ({
           )}
         </button>
 
-        <button 
-          onClick={() => onAddToQueue(episode, 'bottom')}
-          className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-4 rounded-2xl font-bold flex items-center transition-all"
-        >
-          <Plus size={20} className="mr-2" />
-          Add to Queue
-        </button>
+        {!isCurrent && <EpisodeQueueActions
+          onAction={action => onAddToQueue(episode, action)}
+          className="flex items-center rounded-2xl bg-slate-800 px-5 py-4 font-bold text-white transition-colors hover:bg-slate-700"
+        />}
 
         {downloadStatus === 'none' && (
           <button 

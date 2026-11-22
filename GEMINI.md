@@ -37,7 +37,7 @@ The application follows a "local-first" architecture with a hybrid storage model
 - **Progressive Web App (PWA)**: Installable as a standalone application with service worker support.
 - **Persistent Player Bar**: A permanent playback control bar at the bottom of the screen provides constant access to playback status, seek controls, and the play queue, regardless of whether an episode is currently active.
 - **Session Continuity**: Automatically remembers and pre-loads the last playing episode and its exact timestamp when the app is reopened.
-- **Smart Queue Management**: Manages playback order, ensuring the currently playing episode remains securely at the top of the queue. Allows direct playback from any item in the queue.
+- **Smart Queue Management**: Shows the current episode above the primary and secondary queues. The Queue page supports reordering, moving episodes between tiers, and starting playback directly from either tier.
 - **Cloud Sync (Google Drive)**: Secure synchronization of app state across devices using Google Drive's hidden `appDataFolder`.
 - **System Media Controls**: Full integration with the browser's Media Session API, allowing control via OS-level media widgets, lock screens, and hardware buttons. Includes rich metadata and high-quality artwork.
 - **New Releases**: A dedicated view aggregating the latest episodes from all subscriptions. Uses batched fetching (10 at a time) and progressive UI updates for high performance.

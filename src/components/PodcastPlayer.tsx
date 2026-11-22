@@ -1,20 +1,21 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef } from 'react';
 import { 
-  RotateCcw, RotateCw, Pause, Play, List, X, 
-  ChevronUp, ChevronDown, Maximize2, Trash2, Podcast as PodcastIcon
+  RotateCcw, RotateCw, Pause, Play, List, Maximize2, Podcast as PodcastIcon
 } from 'lucide-react';
-import type { Episode, Podcast, AppState, SkipInterval } from '../types';
+import type { Episode, Podcast, SkipInterval } from '../types';
 import NowPlayingScreen from './NowPlayingScreen';
 
 interface PodcastPlayerProps {
-  state: AppState;
+  queueButton: React.Ref<HTMLButtonElement>;
+  queueOpen: boolean;
+  queueCount: number;
+  onQueue: () => void;
   currentEpisode: Episode | null;
   playingPodcast: Podcast | null;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
   togglePlay: () => void;
-  playEpisode: (episode: Episode) => void;
   skip: (seconds: number) => void;
   skipBackwardSeconds: SkipInterval;
   skipForwardSeconds: SkipInterval;
@@ -22,19 +23,19 @@ interface PodcastPlayerProps {
   formatTime: (time: number) => string;
   playbackError: boolean;
   retry: () => void;
-  reorderQueue: (id: string, direction: 'up' | 'down') => void;
-  removeFromQueue: (id: string) => void;
 }
 
 const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
-  state,
+  queueButton,
+  queueOpen,
+  queueCount,
+  onQueue,
   currentEpisode,
   playingPodcast,
   isPlaying,
   currentTime,
   duration,
   togglePlay,
-  playEpisode,
   skip,
   skipBackwardSeconds,
   skipForwardSeconds,
@@ -42,79 +43,16 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
   formatTime,
   playbackError,
   retry,
-  reorderQueue,
-  removeFromQueue
 }) => {
-  const [isQueueOpen, setIsQueueOpen] = useState(false);
   const nowPlayingRef = useRef<HTMLDialogElement>(null);
   const hasDuration = Number.isFinite(duration) && duration > 0;
   const progress = hasDuration && Number.isFinite(currentTime) ? currentTime / duration : 0;
 
   return (
-    <footer className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-3 md:p-6 z-50">
+    <footer id="player-bar" className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-3 md:p-6 z-50">
       {playbackError && (
         <div role="alert" className="mb-2 text-center text-sm text-red-300">
           Couldn’t play this episode. <button className="ml-2 font-bold underline" onClick={retry}>Retry playback</button>
-        </div>
-      )}
-      {isQueueOpen && (
-        <div className="absolute bottom-full right-2 mb-4 w-[min(24rem,95vw)] max-h-[70vh] bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl z-50 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
-          <div className="p-6 border-b border-slate-800 flex items-center justify-between bg-slate-800/50">
-            <div className="flex items-center space-x-2">
-              <List size={20} className="text-blue-500" />
-              <h3 className="font-bold">Play Queue</h3>
-              <span className="bg-blue-600 text-[10px] px-2 py-0.5 rounded-full">{state.queue.length}</span>
-            </div>
-            <button onClick={() => setIsQueueOpen(false)} className="p-2 hover:bg-slate-700 rounded-full transition-colors">
-              <X size={18} />
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
-            {state.queue.length === 0 ? (
-              <div className="text-center py-12 text-slate-500">
-                <List size={48} className="mx-auto mb-4 opacity-10" />
-                <p className="text-sm font-bold opacity-20">Queue is empty</p>
-              </div>
-            ) : (
-              state.queue.map((e, i) => {
-                const podcast = state.subscriptions.find(s => s.feedUrl === e.podcastId);
-                const isItemCurrent = currentEpisode?.id === e.id;
-                return (
-                  <div key={e.id} className={`group p-3 rounded-xl border flex items-center space-x-3 transition-colors ${
-                    isItemCurrent 
-                      ? 'bg-blue-600/20 border-blue-500/50' 
-                      : 'bg-slate-800/40 border-slate-800/50'
-                  }`}>
-                    <div className={`text-[10px] font-mono font-black w-4 ${isItemCurrent ? 'text-blue-400' : 'text-slate-600'}`}>{i + 1}</div>
-                    {podcast?.artworkUrl ? (
-                      <img src={podcast.artworkUrl} className="w-8 h-8 rounded shadow-lg bg-slate-800 flex-shrink-0 object-cover" alt="" />
-                    ) : (
-                      <div className="w-8 h-8 rounded shadow-lg bg-slate-800 flex items-center justify-center flex-shrink-0 text-slate-600">
-                        <PodcastIcon size={16} />
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className={`text-xs font-bold truncate ${isItemCurrent ? 'text-blue-400' : ''}`}>{e.title}</div>
-                      <div className="text-[10px] text-slate-500 truncate">{podcast?.title || e.podcastId}</div>
-                    </div>
-                    {!isItemCurrent && (
-                      <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => playEpisode(e)} className="p-1 hover:text-blue-400" title="Play Now"><Play size={14} fill="currentColor" /></button>
-                        <button onClick={() => reorderQueue(e.id, 'up')} className="p-1 hover:text-blue-400"><ChevronUp size={14} /></button>
-                        <button onClick={() => reorderQueue(e.id, 'down')} className="p-1 hover:text-blue-400"><ChevronDown size={14} /></button>
-                        <button onClick={() => removeFromQueue(e.id)} className="p-1 hover:text-red-400 ml-1"><Trash2 size={14} /></button>
-                      </div>
-                    )}
-                    {isItemCurrent && (
-                      <div className="flex items-center space-x-1 text-blue-500">
-                        {isPlaying ? <div className="animate-pulse"><Play size={14} fill="currentColor" /></div> : <Pause size={14} fill="currentColor" />}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
         </div>
       )}
       <div className="max-w-screen-2xl mx-auto flex flex-col items-center">
@@ -176,11 +114,13 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
 
           <div className="md:w-1/3 flex justify-end items-center space-x-2 md:space-x-6 text-[10px] font-mono font-bold text-slate-500">
             <button 
-              onClick={() => setIsQueueOpen(!isQueueOpen)}
-              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg transition-colors ${isQueueOpen ? 'bg-blue-600 text-white' : 'bg-slate-800 hover:bg-slate-700'}`}
+              ref={queueButton}
+              onClick={onQueue}
+              aria-current={queueOpen ? 'page' : undefined}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg transition-colors ${queueOpen ? 'bg-blue-600 text-white' : 'bg-slate-800 hover:bg-slate-700'}`}
             >
               <List size={14} />
-              <span>Queue ({state.queue.length})</span>
+              <span>Queue ({queueCount})</span>
             </button>
             <span className="bg-slate-800 px-2 py-1 rounded">{formatTime(currentTime)} / {formatTime(duration)}</span>
           </div>

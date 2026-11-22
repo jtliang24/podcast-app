@@ -7,8 +7,13 @@ import { resumePoint } from '../services/driveSync';
 import type { ResumePoint } from '../services/driveSync';
 import { formatTime } from './usePodcastPlayer';
 import type { UsePodcastPlayerProps } from './usePodcastPlayer';
+import { orderedQueue } from '../services/playbackQueue';
 
 type Command = Omit<Parameters<typeof AndroidPlayback.control>[0], 'profile'>;
+
+function queueTracks(state: AppState) {
+  return orderedQueue(state.queue).map(episode => track(state, episode));
+}
 
 function track(state: AppState, episode: Episode, time = state.playbackProgress[episode.audioUrl]?.currentTime ?? 0): AndroidTrack {
   const podcast = state.subscriptions.find(p => p.feedUrl === episode.podcastId);
@@ -21,6 +26,7 @@ export function useAndroidPodcastPlayer({
   const [playback, setPlayback] = useState<AndroidPlaybackState | null>(null);
   const [connectionError, setConnectionError] = useState(false);
   const [remoteOffer, setRemoteOffer] = useState<ResumePoint | null>(null);
+  const [acknowledgedRevision, setAcknowledgedRevision] = useState(0);
   const storage = useRef({ state, updateState, skipBackwardSeconds, skipForwardSeconds });
   const active = useRef(false);
   const operations = useRef(Promise.resolve());
@@ -31,10 +37,10 @@ export function useAndroidPodcastPlayer({
   }, [state, updateState, skipBackwardSeconds, skipForwardSeconds]);
   useEffect(() => { setRemoteOffer(remoteSession); }, [remoteSession]);
 
-  const request = useCallback((command: Command) => {
+  const request = useCallback((command: Command | (() => Command)) => {
     const run = async () => {
       if (!active.current) return;
-      const snapshot = await AndroidPlayback.control({ ...command, profile });
+      const snapshot = await AndroidPlayback.control({ ...(typeof command === 'function' ? command() : command), profile });
       if (!active.current) return;
       setPlayback(snapshot);
       setConnectionError(false);
@@ -44,6 +50,9 @@ export function useAndroidPodcastPlayer({
         .then(async saved => {
           if (saved !== false && active.current) {
             await AndroidPlayback.control({ profile, action: 'acknowledge', revision: snapshot.revision });
+            if (active.current && snapshot.changes.some(change => change.selected || change.finished)) {
+              setAcknowledgedRevision(snapshot.revision);
+            }
           }
         })
         .catch(() => { /* The service retains these changes for the next reconciliation. */ })
@@ -62,7 +71,7 @@ export function useAndroidPodcastPlayer({
       action: 'open',
       track: point ? track(state, point.episode, point.time) : undefined,
       updated: point ? state.playbackProgress[point.episode.audioUrl]?.lastUpdated : undefined,
-      queue: state.queue.map(episode => track(state, episode)),
+      queue: queueTracks(state),
       skipBackwardSeconds,
       skipForwardSeconds,
     });
@@ -94,11 +103,8 @@ export function useAndroidPodcastPlayer({
   }, [ready, request, skipBackwardSeconds, skipForwardSeconds]);
 
   useEffect(() => {
-    if (ready) {
-      const current = storage.current.state;
-      void request({ action: 'queue', queue: queue.map(episode => track(current, episode)) });
-    }
-  }, [ready, queue, subscriptions, playbackProgress, request]);
+    if (ready) void request(() => ({ action: 'queue', queue: queueTracks(storage.current.state) }));
+  }, [ready, queue, subscriptions, playbackProgress, acknowledgedRevision, request]);
 
   const currentEpisode = playback?.episode ?? null;
   const playingPodcast = state.subscriptions.find(p => p.feedUrl === currentEpisode?.podcastId) ?? null;
@@ -108,7 +114,7 @@ export function useAndroidPodcastPlayer({
     void request({ action: 'toggle' });
   }, [request]);
   const playEpisode = useCallback((episode: Episode) => {
-    if (currentEpisode?.audioUrl === episode.audioUrl) {
+    if (currentEpisode?.id === episode.id) {
       togglePlay();
     } else {
       setRemoteOffer(null);

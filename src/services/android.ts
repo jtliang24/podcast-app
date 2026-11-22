@@ -17,6 +17,7 @@ export interface PlaybackChange {
   duration: number;
   updated: number;
   finished?: boolean;
+  selected?: boolean;
   lastPlayed?: number;
 }
 

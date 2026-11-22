@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import { 
   Play, Pause, CheckCircle2, 
-  MoreVertical, ChevronUp, List, Check, History, 
+  MoreVertical, Check, History,
   ArrowDownToLine, Loader2, Podcast as PodcastIcon 
 } from 'lucide-react';
-import type { Episode } from '../types';
+import type { Episode, QueueEpisode } from '../types';
+import EpisodeQueueActions from './EpisodeQueueActions';
 
 interface EpisodeItemProps {
   episode: Episode;
@@ -15,7 +16,7 @@ interface EpisodeItemProps {
   downloadStatus: 'none' | 'downloading' | 'downloaded';
   onDownload: (e: Episode) => void;
   onDeleteDownload: (id: string) => void;
-  onAddToQueue: (e: Episode, position: 'top' | 'bottom') => void;
+  onAddToQueue: QueueEpisode;
   artworkUrl?: string;
   isPlayed?: boolean;
   onTogglePlayed?: (id: string, played: boolean) => void;
@@ -71,28 +72,31 @@ const EpisodeItem = React.memo(({
       </div>
 
       <div className="flex items-center space-x-2">
-        <div className="relative">
+        <div className="relative" onBlur={event => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setShowMenu(false);
+        }} onKeyDown={event => {
+          if (event.key === 'Escape' && showMenu) {
+            event.currentTarget.querySelector('button')?.focus();
+            setShowMenu(false);
+          }
+        }}>
           <button
             onClick={() => setShowMenu(!showMenu)}
-            onBlur={() => setTimeout(() => setShowMenu(false), 200)}
-            className="p-2 rounded-full text-slate-400 hover:text-white bg-slate-800 opacity-0 group-hover:opacity-100 transition-all"
+            aria-label={`More actions for ${episode.title}`}
+            aria-expanded={showMenu}
+            className="p-2 rounded-full text-slate-400 hover:text-white bg-slate-800 transition-all"
           >
             <MoreVertical size={16} />
           </button>
           {showMenu && (
             <div className="absolute right-0 bottom-full mb-2 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
-              <button
-                onClick={() => onAddToQueue(episode, 'top')}
-                className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-blue-600 transition-colors flex items-center"
-              >
-                <ChevronUp size={14} className="mr-2" /> Play Next
-              </button>
-              <button
-                onClick={() => onAddToQueue(episode, 'bottom')}
-                className="w-full text-left px-4 py-3 text-xs font-bold hover:bg-slate-700 border-t border-slate-700 transition-colors flex items-center"
-              >
-                <List size={14} className="mr-2" /> Add to Queue
-              </button>
+              {!isCurrent && <EpisodeQueueActions
+                onAction={action => {
+                  onAddToQueue(episode, action);
+                  setShowMenu(false);
+                }}
+                className="flex w-full items-center px-4 py-3 text-left text-xs font-bold hover:bg-slate-700 focus-visible:bg-slate-700"
+              />}
               {onTogglePlayed && (
                 <button
                   onClick={() => onTogglePlayed(episode.id, !isPlayed)}

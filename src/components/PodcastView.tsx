@@ -1,6 +1,6 @@
 import React from 'react';
 import { Loader2, ChevronDown, CheckCircle2 } from 'lucide-react';
-import type { AppState, Episode, Podcast, SortOrder } from '../types';
+import type { AppState, Episode, Podcast, SortOrder, QueueEpisode } from '../types';
 import EpisodeItem from './EpisodeItem';
 
 interface PodcastViewProps {
@@ -17,7 +17,7 @@ interface PodcastViewProps {
   downloadingIds: Set<string>;
   handleDownload: (episode: Episode) => void;
   handleDeleteDownload: (id: string) => void;
-  addToQueue: (episode: Episode, position: 'top' | 'bottom') => void;
+  addToQueue: QueueEpisode;
   toggleEpisodePlayed: (id: string, played: boolean) => void;
   handleMarkOlderAsPlayed: (episode: Episode) => void;
   toggleHidePlayed: (contextId: string, hidden: boolean) => void;

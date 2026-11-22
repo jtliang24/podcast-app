@@ -2,6 +2,7 @@ package io.github.jtliang24.podcastapp;
 
 import android.app.PendingIntent;
 import android.os.Bundle;
+import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResult;
 import androidx.activity.result.ActivityResultCallback;
 import androidx.activity.result.ActivityResultLauncher;
@@ -22,6 +23,22 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(PodcastHttpPlugin.class);
         registerPlugin(PodcastDrivePlugin.class);
         super.onCreate(savedInstanceState);
+
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                if (bridge != null && bridge.getWebView().canGoBack()) {
+                    bridge.getWebView().goBack();
+                    return;
+                }
+                setEnabled(false);
+                try {
+                    getOnBackPressedDispatcher().onBackPressed();
+                } finally {
+                    setEnabled(true);
+                }
+            }
+        });
 
         driveConsent = registerForActivityResult(new ActivityResultContracts.StartIntentSenderForResult(), result -> {
             ActivityResultCallback<ActivityResult> callback = driveResult;

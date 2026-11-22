@@ -1,5 +1,6 @@
-import { INITIAL_STATE } from '../types.ts';
 import type { AppState, Episode, Podcast } from '../types.ts';
+import { normalizeQueue, normalizeState, orderedQueue } from './playbackQueue.ts';
+import type { StateSnapshot } from './playbackQueue.ts';
 
 export const routineUploadInterval = 30_000;
 
@@ -14,13 +15,15 @@ const fields = [
 ] as const;
 type MapField = typeof maps[number];
 type ScalarField = typeof fields[number];
+type NonQueueField = Exclude<ScalarField, 'queue'>;
 
 type Change =
   | { field: 'subscriptions'; key: string; value?: Podcast }
   | { field: 'episodeMetadata'; key: string; value: Episode }
   | { field: 'sessionUrl'; key?: never; value: string }
   | { [K in MapField]: { field: K; key: string; value?: NonNullable<AppState[K]>[string] } }[MapField]
-  | { [K in ScalarField]: { field: K; key?: never; value?: AppState[K] } }[ScalarField];
+  | { field: 'queue'; key?: never; value?: StateSnapshot['queue'] }
+  | { [K in NonQueueField]: { field: K; key?: never; value?: AppState[K] } }[NonQueueField];
 
 interface Stamp {
   time: number;
@@ -40,6 +43,7 @@ export interface Profile {
   versions: Record<string, Stamp>;
   applied: Record<string, true>;
   pending: { batch: Batch; urgent: boolean; fileId?: string; checkpoint?: string; due?: number }[];
+  legacyQueue?: Episode[];
   episodes?: Record<string, Episode>;
   sessionUrl?: string;
   lastCheckpointUpload?: Record<string, number>;
@@ -50,8 +54,8 @@ export interface Profile {
   pullRetryAt?: number;
 }
 
-export function newProfile(snapshot?: Partial<AppState>): Profile {
-  return { state: { ...INITIAL_STATE, ...snapshot }, seeded: !!snapshot, clock: 0, versions: {}, applied: {}, pending: [] };
+export function newProfile(snapshot?: StateSnapshot): Profile {
+  return { state: normalizeState(snapshot ?? {}), seeded: !!snapshot, clock: 0, versions: {}, applied: {}, pending: [] };
 }
 
 function diffEntries<K extends MapField | 'subscriptions'>(
@@ -87,7 +91,8 @@ export function recordEdit(profile: Profile, update: StateUpdate, device: string
         changes.push({ field: 'episodeMetadata', key: episode.audioUrl, value: episode });
       }
       changes.push({ field: 'sessionUrl', value: episode.audioUrl });
-    } else if (before[field] !== after[field] || checkpoint) {
+    } else if (before[field] !== after[field] || checkpoint
+      || (field === 'queue' && profile.legacyQueue && before.lastPlayingEpisode?.id !== after.lastPlayingEpisode?.id)) {
       changes.push({ field, value: after[field] } as Change);
     }
   }
@@ -158,6 +163,9 @@ export function applyBatch(profile: Profile, batch: Batch) {
     } else if (change.field === 'lastPlayingEpisode') {
       profile.sessionUrl = change.value?.audioUrl;
       state.lastPlayingEpisode = change.value;
+    } else if (change.field === 'queue') {
+      profile.legacyQueue = Array.isArray(change.value) ? change.value : undefined;
+      state.queue = normalizeQueue(change.value);
     } else if (change.field === 'subscriptions') {
       const items = state.subscriptions.filter(p => p.feedUrl !== change.key);
       if (change.value) items.push(change.value);
@@ -176,10 +184,20 @@ export function applyBatch(profile: Profile, batch: Batch) {
   }
   if (profile.sessionUrl) {
     const url = profile.sessionUrl;
-    const episode = profile.episodes?.[url] ?? profile.state.queue.find(item => item.audioUrl === url)
+    const episode = profile.episodes?.[url]
+      ?? (profile.legacyQueue ?? orderedQueue(profile.state.queue)).find(item => item.audioUrl === url)
       ?? profile.state.newReleases.find(item => item.audioUrl === url);
     profile.state.lastPlayingEpisode = episode ?? (profile.state.lastPlayingEpisode?.audioUrl === url
       ? profile.state.lastPlayingEpisode : null);
+  }
+  if (profile.legacyQueue) {
+    // A legacy queue can arrive before the session batch that identifies its current episode.
+    const current = profile.state.lastPlayingEpisode;
+    const waiting = profile.legacyQueue.filter(item => item.id !== current?.id);
+    const previous = profile.state.queue.secondary;
+    if (waiting.length !== previous.length || waiting.some((item, index) => item !== previous[index])) {
+      profile.state.queue = { primary: [], secondary: waiting };
+    }
   }
   profile.clock = Math.max(profile.clock, time);
   profile.applied[batch.id] = true;
@@ -194,9 +212,10 @@ function applyEpisodeMetadata(profile: Profile, episode: Episode, time: number, 
 }
 
 // On a first offline launch, edits can precede the initial snapshot download.
-export function seedProfile(profile: Profile, snapshot: Partial<AppState>) {
+export function seedProfile(profile: Profile, snapshot: StateSnapshot) {
   if (profile.seeded) return profile;
-  const seeded = { ...profile, ...newProfile(snapshot), episodes: undefined, sessionUrl: undefined, pending: profile.pending };
+  const seeded = { ...profile, ...newProfile(snapshot), episodes: undefined, sessionUrl: undefined,
+    legacyQueue: undefined, pending: profile.pending };
   for (const { batch } of seeded.pending) applyBatch(seeded, batch);
   return seeded;
 }

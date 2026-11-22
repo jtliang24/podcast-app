@@ -1,6 +1,6 @@
 import React from 'react';
 import { HardDrive } from 'lucide-react';
-import type { AppState, Episode } from '../types';
+import type { AppState, Episode, QueueEpisode } from '../types';
 import EpisodeItem from './EpisodeItem';
 
 interface DownloadsViewProps {
@@ -12,7 +12,7 @@ interface DownloadsViewProps {
   onShowDescription?: (episode: Episode) => void;
   handleDownload: (episode: Episode) => void;
   handleDeleteDownload: (id: string) => void;
-  addToQueue: (episode: Episode, position: 'top' | 'bottom') => void;
+  addToQueue: QueueEpisode;
   toggleEpisodePlayed: (id: string, played: boolean) => void;
 }
 

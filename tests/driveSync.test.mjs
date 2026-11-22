@@ -142,12 +142,17 @@ test('offline restart, expired access, lost upload acknowledgement and foregroun
   const first = syncSession(t, phone, 'expired', 'phone');
   await first.engine.restore();
   await first.engine.edit(position(60), false, true);
-  await first.engine.edit(position(42.75), true);
+  const queue = {
+    primary: ['first', 'second'].map(id => ({ ...ep, id, audioUrl: id })),
+    secondary: ['third', 'fourth'].map(id => ({ ...ep, id, audioUrl: id })),
+  };
+  await first.engine.edit(state => ({ ...position(42.75)(state), queue }), true);
   assert.equal(first.events.status, 'Saved on this device');
   first.engine.stop();
   const reopened = syncSession(t, phone, 'expired', 'phone');
   await reopened.engine.restore();
   assert.equal(resumePoint(reopened.events.state).time, 42.75);
+  assert.deepEqual(reopened.events.state.queue, queue);
   online = true;
   reopened.engine.setEnvironment('limited', true, false);
   await until(() => reopened.events.status === 'Reconnect Google Drive');
@@ -164,12 +169,17 @@ test('offline restart, expired access, lost upload acknowledgement and foregroun
   desktop.engine.refresh();
   await until(() => desktop.events.remote?.time === 42.75);
   assert.deepEqual(desktop.events.state.subscriptions, [show]);
+  assert.deepEqual(desktop.events.state.queue, queue);
 });
 
 test('an existing playback backlog preserves reserved checkpoints and queue edits', async t => {
   Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
   t.after(() => delete navigator.onLine);
   const phone = deviceStore();
+  const queue = {
+    primary: [{ ...ep, id: 'next', audioUrl: 'next' }],
+    secondary: [{ ...ep, id: 'later', audioUrl: 'later' }],
+  };
   await phone('library', p => {
     const profile = seedProfile(p, { subscriptions: [show] });
     const legacyCheckpoint = (time, urgent) => {
@@ -187,7 +197,7 @@ test('an existing playback backlog preserves reserved checkpoints and queue edit
     };
     legacyCheckpoint(60, true).fileId = 'reserved-old-checkpoint';
     legacyCheckpoint(65, false);
-    recordEdit(profile, state => ({ ...state, queue: [ep] }), 'phone', false, 70);
+    recordEdit(profile, state => ({ ...state, queue }), 'phone', false, 70);
     legacyCheckpoint(80, false);
     return profile;
   });
@@ -210,7 +220,7 @@ test('an existing playback backlog preserves reserved checkpoints and queue edit
   assert.equal(uploads.length, 3);
   assert.equal(uploads[0].id, 'reserved-old-checkpoint');
   assert.equal(uploads[0].batch.changes.find(change => change.field === 'playbackProgress').value.currentTime, 60);
-  assert.deepEqual(uploads[1].batch.changes, [{ field: 'queue', value: [ep] }]);
+  assert.deepEqual(uploads[1].batch.changes, [{ field: 'queue', value: queue }]);
   assert.equal(uploads[2].batch.changes.find(change => change.field === 'playbackProgress').value.currentTime, 80);
   assert.equal((await phone('library')).pending.length, 0);
 });

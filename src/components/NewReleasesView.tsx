@@ -1,6 +1,6 @@
 import React from 'react';
 import { Clock, RotateCw, Loader2, CheckCircle2 } from 'lucide-react';
-import type { AppState, Episode } from '../types';
+import type { AppState, Episode, QueueEpisode } from '../types';
 import EpisodeItem from './EpisodeItem';
 
 interface NewReleasesViewProps {
@@ -16,7 +16,7 @@ interface NewReleasesViewProps {
   downloadingIds: Set<string>;
   handleDownload: (episode: Episode) => void;
   handleDeleteDownload: (id: string) => void;
-  addToQueue: (episode: Episode, position: 'top' | 'bottom') => void;
+  addToQueue: QueueEpisode;
   toggleEpisodePlayed: (id: string, played: boolean) => void;
 }
 

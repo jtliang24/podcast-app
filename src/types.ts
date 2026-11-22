@@ -19,6 +19,15 @@ export interface Episode {
   keywords?: string[];
 }
 
+export interface EpisodeQueue {
+  primary: Episode[];
+  secondary: Episode[];
+}
+
+export type QueueTier = keyof EpisodeQueue;
+export type QueueAction = 'play-next' | 'play-up-next' | 'add-to-queue';
+export type QueueEpisode = (episode: Episode, action: QueueAction) => void;
+
 export interface PlaybackProgress {
   episodeUrl: string;
   currentTime: number;
@@ -37,7 +46,7 @@ export type SkipInterval = typeof SKIP_INTERVALS[number];
 export interface AppState {
   subscriptions: Podcast[];
   playbackProgress: Record<string, PlaybackProgress>;
-  queue: Episode[];
+  queue: EpisodeQueue;
   newReleases: Episode[];
   lastRefresh?: number;
   podcastSortOrders: Record<string, SortOrder>;
@@ -57,7 +66,7 @@ export interface AppState {
 export const INITIAL_STATE: AppState = {
   subscriptions: [],
   playbackProgress: {},
-  queue: [],
+  queue: { primary: [], secondary: [] },
   newReleases: [],
   podcastSortOrders: {},
   playedEpisodes: {},

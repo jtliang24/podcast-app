@@ -9,7 +9,7 @@ const second = episode('second');
 const third = episode('third');
 
 test('reconciles episodes completed and started while the WebView was suspended', () => {
-  const state = { ...INITIAL_STATE, queue: [first, second, third], lastPlayingEpisode: first };
+  const state = { ...INITIAL_STATE, queue: { primary: [second], secondary: [third] }, lastPlayingEpisode: first };
   const restored = applyAndroidPlayback(state, {
     episode: third,
     changes: [
@@ -19,7 +19,7 @@ test('reconciles episodes completed and started while the WebView was suspended'
     ],
   });
 
-  assert.deepEqual(restored.queue, [third]);
+  assert.deepEqual(restored.queue, { primary: [], secondary: [] });
   assert.deepEqual(restored.playedEpisodes, { first: true, second: true });
   assert.equal(restored.lastPlayingEpisode, third);
   assert.equal(restored.playbackProgress[third.audioUrl].currentTime, 15);
@@ -29,14 +29,15 @@ test('reconciles episodes completed and started while the WebView was suspended'
     changes: [{ episode: third, finished: true, updated: 400 }],
   });
   assert.equal(ended.lastPlayingEpisode, null);
-  assert.deepEqual(ended.queue, []);
+  assert.deepEqual(ended.queue, { primary: [], secondary: [] });
   assert.deepEqual(ended.playbackProgress, {});
 });
 
 test('a pending native checkpoint preserves newer listening progress from Drive', () => {
   const recent = { currentTime: 40, lastUpdated: 500 };
   const state = {
-    ...INITIAL_STATE, queue: [first, second], lastPlayingEpisode: first, playbackProgress: { [first.audioUrl]: recent },
+    ...INITIAL_STATE, queue: { primary: [], secondary: [second] }, lastPlayingEpisode: first,
+    playbackProgress: { [first.audioUrl]: recent },
   };
   const restored = applyAndroidPlayback(state, {
     episode: second,
@@ -47,9 +48,23 @@ test('a pending native checkpoint preserves newer listening progress from Drive'
   });
 
   assert.equal(restored.lastPlayingEpisode, first);
-  assert.deepEqual(restored.queue, [first, second]);
+  assert.deepEqual(restored.queue, { primary: [], secondary: [second] });
   assert.equal(restored.playbackProgress[first.audioUrl], recent);
   assert.equal(restored.playbackProgress[second.audioUrl].currentTime, 15);
+});
+
+test('consumes direct selections made before the native journal reconciles', () => {
+  const state = { ...INITIAL_STATE, queue: { primary: [first, third], secondary: [second] } };
+  const restored = applyAndroidPlayback(state, {
+    episode: second,
+    changes: [
+      { episode: third, time: 0, duration: 60, updated: 100, selected: true },
+      { episode: second, time: 0, duration: 60, updated: 200, selected: true },
+    ],
+  });
+  assert.equal(restored.lastPlayingEpisode, second);
+  assert.deepEqual(restored.queue, { primary: [first], secondary: [] });
+  assert.deepEqual(restored.playedEpisodes, {});
 });
 
 test('recently played survives a completion and ignores seek-only or older checkpoints', () => {

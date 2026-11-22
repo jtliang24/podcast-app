@@ -1,5 +1,6 @@
 import { newProfile } from './profileChanges.ts';
 import type { Profile } from './profileChanges.ts';
+import { normalizeState } from './playbackQueue.ts';
 
 let database: Promise<IDBDatabase> | undefined;
 
@@ -23,6 +24,7 @@ export async function accessProfile(id: string, edit?: (profile: Profile) => Pro
     let profile: Profile;
     request.onsuccess = () => {
       profile = request.result ?? newProfile();
+      if (request.result) profile.state = normalizeState(profile.state);
       if (edit) {
         try {
           profile = edit(profile) ?? profile;

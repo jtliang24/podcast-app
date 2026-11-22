@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { AppState } from '../types';
 import { INITIAL_STATE } from '../types';
+import { normalizeState } from '../services/playbackQueue';
+import type { StateSnapshot } from '../services/playbackQueue';
 import { DriveSync } from '../services/driveSync';
 import type { ResumePoint, SyncNetwork, SyncStatus } from '../services/driveSync';
 import { accessProfile } from '../services/profileStore';
@@ -181,9 +183,8 @@ export function useFileSystem(network: SyncNetwork) {
       const file = await fileHandle.getFile();
       const text = await file.text();
       if (text) {
-        const parsed = JSON.parse(text) as Partial<AppState>;
-        const newState = { ...INITIAL_STATE, ...parsed };
-        publish(newState);
+        const parsed = JSON.parse(text) as StateSnapshot;
+        publish(normalizeState(parsed));
       } else {
         // New file, save initial state
         await saveToOPFS(INITIAL_STATE);
@@ -201,8 +202,8 @@ export function useFileSystem(network: SyncNetwork) {
     try {
       const file = await handle.getFile();
       const text = await file.text();
-      const parsed = JSON.parse(text) as Partial<AppState>;
-      publish({ ...INITIAL_STATE, ...parsed });
+      const parsed = JSON.parse(text) as StateSnapshot;
+      publish(normalizeState(parsed));
     } catch (err) {
       console.error('Error loading state:', err);
       publish(INITIAL_STATE);
@@ -221,7 +222,7 @@ export function useFileSystem(network: SyncNetwork) {
         try {
           const stored = await AndroidFiles.readState();
           if (cancelled) return;
-          if (stored.json) publish({ ...INITIAL_STATE, ...JSON.parse(stored.json) });
+          if (stored.json) publish(normalizeState(JSON.parse(stored.json)));
           setLocalLibraryId(stored.id);
           setLinkedFile(stored.linked);
           setReconnectFile(stored.reconnect);
@@ -352,7 +353,7 @@ export function useFileSystem(network: SyncNetwork) {
       await writes.current;
       const stored = await AndroidFiles.linkState({ action });
       if ('cancelled' in stored) return;
-      if (action === 'open' && stored.json) publish({ ...INITIAL_STATE, ...JSON.parse(stored.json) });
+      if (action === 'open' && stored.json) publish(normalizeState(JSON.parse(stored.json)));
       setLocalLibraryId(stored.id);
       setLinkedFile(stored.linked);
       setReconnectFile(stored.reconnect);
@@ -386,9 +387,9 @@ export function useFileSystem(network: SyncNetwork) {
   const importState = useCallback(async (file: File) => {
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text) as Partial<AppState> | null;
+      const parsed = JSON.parse(text) as StateSnapshot | null;
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid state file');
-      await updateState({ ...INITIAL_STATE, ...parsed });
+      await updateState(normalizeState(parsed));
     } catch (err) {
       console.error('Error importing state:', err);
       setStorageError('Could not import this JSON file.');

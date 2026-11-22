@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useDriveLogin } from './hooks/useDriveLogin';
 import { searchStateFile, createStateFile } from './services/driveService';
 import { useFileSystem } from './hooks/useFileSystem';
@@ -11,7 +11,8 @@ import { AndroidFiles, isAndroid } from './services/android';
 import { fetchPodcastFeed, PrivateFeedError, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { getPreferences } from './services/preferences';
 import { latestEpisodeRelease, releaseDatesByPodcast } from './services/subscriptionSort';
-import type { Podcast, Episode, SortOrder, AppState } from './types';
+import { moveQueuedEpisode, normalizeState, orderedQueue, queueEpisode, removeQueuedEpisode } from './services/playbackQueue';
+import type { Podcast, Episode, SortOrder, QueueEpisode, QueueTier } from './types';
 import { Loader2, FolderOpen, Plus, Cloud, X } from 'lucide-react';
 import { INITIAL_STATE } from './types';
 
@@ -19,6 +20,7 @@ import { INITIAL_STATE } from './types';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import PodcastPlayer from './components/PodcastPlayer';
+import QueueView from './components/QueueView';
 import NewReleasesView from './components/NewReleasesView';
 import DownloadsView from './components/DownloadsView';
 import PodcastView from './components/PodcastView';
@@ -120,8 +122,7 @@ function Library({ storage, profile, downloads, connection }: {
       setDriveLoadingMessage('Uploading state file to Drive...');
       try {
         const text = await file.text();
-        const parsed = JSON.parse(text) as AppState;
-        const newState = { ...INITIAL_STATE, ...parsed };
+        const newState = normalizeState(JSON.parse(text));
         const fileId = await createStateFile(setupToken, JSON.stringify(newState, null, 2));
         await connectDrive(setupToken, fileId, newState);
         setSetupToken(null);
@@ -136,6 +137,26 @@ function Library({ storage, profile, downloads, connection }: {
   };
 
   const [viewMode, setViewMode] = useState<'search' | 'downloads' | 'new-releases'>('search');
+  const [queueOpen, setQueueOpen] = useState(() => history.state?.podcastQueue === true);
+  const queueButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const onBack = () => {
+      const open = history.state?.podcastQueue === true;
+      setQueueOpen(open);
+      if (queueOpen && !open) queueButton.current?.focus({ preventScroll: true });
+    };
+    window.addEventListener('popstate', onBack);
+    return () => window.removeEventListener('popstate', onBack);
+  }, [queueOpen]);
+  const closeQueue = () => history.back();
+  const toggleQueue = () => {
+    if (queueOpen) closeQueue();
+    else {
+      history.pushState({ ...history.state, podcastQueue: true }, '');
+      setQueueOpen(true);
+      window.scrollTo(0, 0);
+    }
+  };
   const [searchQuery, setSearchQuery] = useState('');
   const [urlInput, setUrlInput] = useState('');
   const [isAddingByUrl, setIsAddingByUrl] = useState(false);
@@ -164,11 +185,6 @@ function Library({ storage, profile, downloads, connection }: {
   const preferences = getPreferences(state);
   const { skipBackwardSeconds, skipForwardSeconds } = preferences;
   const ready = !isLoading && !setupToken && (!isFileSystemAccessSupported || !!fileHandle || storageMode === 'google-drive');
-
-  // Download Management
-  const { requestDownload: handleDownload, confirmation, answerConfirmation } = useDownloadPolicy({
-    connection, ready, queue: state.queue, preferences, storage: downloads, onError: setDownloadError,
-  });
 
   const handleDeleteDownload = useCallback(async (episodeId: string) => {
     try {
@@ -222,6 +238,20 @@ function Library({ storage, profile, downloads, connection }: {
     state, profile, ready, skipBackwardSeconds, skipForwardSeconds,
     updateState, downloadedEpisodes, downloadsReady, remoteSession,
   });
+  const currentId = currentEpisode?.id ?? state.lastPlayingEpisode?.id;
+  const waiting = useMemo(() => currentId ? removeQueuedEpisode(state.queue, currentId) : state.queue,
+    [state.queue, currentId]);
+  const downloadQueue = useMemo(() => {
+    const episodes = orderedQueue(waiting);
+    const active = currentEpisode ?? state.lastPlayingEpisode;
+    return active ? [active, ...episodes] : episodes;
+  }, [waiting, currentEpisode, state.lastPlayingEpisode]);
+
+  // Download Management
+  const { requestDownload: handleDownload, confirmation, answerConfirmation } = useDownloadPolicy({
+    connection, ready, queue: downloadQueue, preferences, storage: downloads, onError: setDownloadError,
+  });
+
   useEffect(() => {
     setSyncPlayback(isPlaying);
     return () => setSyncPlayback(false);
@@ -526,55 +556,27 @@ function Library({ storage, profile, downloads, connection }: {
     }
   }, [viewMode, state.newReleases.length, state.subscriptions.length, loadNewReleases]);
 
-  // Queue and Auto-download
-  const addToQueue = useCallback((episode: Episode, position: 'top' | 'bottom') => {
-    updateState(prev => {
-      if (prev.queue.find(e => e.id === episode.id)) return prev;
-      
-      let newQueue;
-      if (position === 'top') {
-        if (currentEpisode && prev.queue.length > 0 && prev.queue[0].id === currentEpisode.id) {
-          // If something is playing and it's at the top, add after it
-          newQueue = [prev.queue[0], episode, ...prev.queue.slice(1)];
-        } else {
-          newQueue = [episode, ...prev.queue];
-        }
-      } else {
-        newQueue = [...prev.queue, episode];
-      }
-      return { ...prev, queue: newQueue };
+  const addToQueue = useCallback<QueueEpisode>((episode, action) => {
+    if (episode.id === currentId) return;
+    void updateState(prev => {
+      const queue = queueEpisode(prev.queue, episode, action);
+      return queue === prev.queue ? prev : { ...prev, queue };
     });
-  }, [updateState, currentEpisode]);
+  }, [updateState, currentId]);
 
-  const removeFromQueue = useCallback((episodeId: string) => {
-    updateState(prev => {
-      if (currentEpisode && episodeId === currentEpisode.id) return prev;
-      return { ...prev, queue: prev.queue.filter(e => e.id !== episodeId) };
+  const removeFromQueue = (id: string) => {
+    void updateState(prev => {
+      const queue = removeQueuedEpisode(prev.queue, id);
+      return queue === prev.queue ? prev : { ...prev, queue };
     });
-  }, [updateState, currentEpisode]);
+  };
 
-  const reorderQueue = useCallback((episodeId: string, direction: 'up' | 'down') => {
-    updateState(prev => {
-      const index = prev.queue.findIndex(e => e.id === episodeId);
-      if (index === -1) return prev;
-
-      const isPlayingAtTop = currentEpisode && prev.queue.length > 0 && prev.queue[0].id === currentEpisode.id;
-      
-      if (isPlayingAtTop) {
-        if (index === 0) return prev; // Cannot move playing episode down
-        if (direction === 'up' && index === 1) return prev; // Cannot move something to position 0
-      } else {
-        if (direction === 'up' && index === 0) return prev;
-      }
-
-      if (direction === 'down' && index === prev.queue.length - 1) return prev;
-
-      const newQueue = [...prev.queue];
-      const targetIndex = direction === 'up' ? index - 1 : index + 1;
-      [newQueue[index], newQueue[targetIndex]] = [newQueue[targetIndex], newQueue[index]];
-      return { ...prev, queue: newQueue };
+  const moveInQueue = (id: string, tier: QueueTier, beforeId?: string) => {
+    void updateState(prev => {
+      const queue = moveQueuedEpisode(prev.queue, id, tier, beforeId);
+      return queue === prev.queue ? prev : { ...prev, queue };
     });
-  }, [updateState, currentEpisode]);
+  };
 
   // OPML and State Handlers
   const handleImportOPML = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -691,7 +693,7 @@ function Library({ storage, profile, downloads, connection }: {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex select-none font-sans overflow-hidden">
-      <div className={showLibrary ? 'fixed inset-x-0 top-12 bottom-32 z-40 overflow-auto bg-slate-900 md:static md:block' : 'hidden md:block'}>
+      <div className={queueOpen ? 'hidden' : showLibrary ? 'fixed inset-x-0 top-12 bottom-32 z-40 overflow-auto bg-slate-900 md:static md:block' : 'hidden md:block'}>
         <Sidebar
           state={state}
           onSubscriptionSortChange={change => void updateState(prev => ({ ...prev, ...change }))}
@@ -707,7 +709,7 @@ function Library({ storage, profile, downloads, connection }: {
           androidFileActions={storageMode === 'android' ? { linkedFile, reconnectFile, choosingFile, linkAndroidFile } : undefined}
         />
       </div>
-      <main className="min-w-0 flex-1 flex flex-col pb-44 md:pb-32 overflow-hidden">
+      <main className={`min-w-0 flex-1 flex-col pb-44 md:pb-32 overflow-hidden ${queueOpen ? 'hidden' : 'flex'}`}>
         <div className="flex flex-wrap items-center justify-end gap-3 px-6 pt-3 text-sm">
           <button className="mr-auto text-blue-300 md:hidden" aria-expanded={showLibrary} onClick={() => setShowLibrary(!showLibrary)}>Library</button>
           <SettingsButton preferences={preferences} onChange={change => void updateState(previous => ({ ...previous, ...change }))} />
@@ -737,7 +739,6 @@ function Library({ storage, profile, downloads, connection }: {
             </button>
           </div>
         )}
-        <DownloadConfirmation episode={confirmation} answer={answerConfirmation} />
         {offer && (hasRemoteOffer || (!isPlaying && viewMode === 'search' && !selectedPodcast && !selectedEpisode && !searchResults.length)) && (
           <section className="mx-4 mt-4 rounded-2xl border border-slate-700 bg-slate-900 p-4 md:mx-6">
             <p className="text-sm text-slate-300">{state.subscriptions.find(p => p.feedUrl === offer.episode.podcastId)?.title || offer.episode.podcastId}</p>
@@ -843,15 +844,31 @@ function Library({ storage, profile, downloads, connection }: {
         </div>
       </main>
 
-      <PodcastPlayer 
-        state={state}
+      {queueOpen && (
+        <main className="min-w-0 flex-1 px-4 pt-6 pb-48 md:px-8 md:pb-36">
+          <QueueView
+            queue={waiting}
+            currentEpisode={currentEpisode ?? state.lastPlayingEpisode ?? null}
+            podcasts={state.subscriptions}
+            onBack={closeQueue}
+            onMove={moveInQueue}
+            onPlay={playEpisode}
+            onRemove={removeFromQueue}
+          />
+        </main>
+      )}
+      <DownloadConfirmation episode={confirmation} answer={answerConfirmation} />
+      <PodcastPlayer
+        queueButton={queueButton}
+        queueOpen={queueOpen}
+        queueCount={waiting.primary.length + waiting.secondary.length}
+        onQueue={toggleQueue}
         currentEpisode={currentEpisode}
         playingPodcast={playingPodcast}
         isPlaying={isPlaying}
         currentTime={currentTime}
         duration={duration}
         togglePlay={togglePlay}
-        playEpisode={playEpisode}
         skip={skip}
         skipBackwardSeconds={skipBackwardSeconds}
         skipForwardSeconds={skipForwardSeconds}
@@ -859,8 +876,6 @@ function Library({ storage, profile, downloads, connection }: {
         formatTime={formatTime}
         playbackError={playbackError}
         retry={retry}
-        reorderQueue={reorderQueue}
-        removeFromQueue={removeFromQueue}
       />
       {!isAndroid && <audio
         ref={audioRef} 

@@ -175,7 +175,7 @@ public class PlaybackService extends MediaSessionService {
                 case "select":
                     checkpoint(true);
                     select(Track.from(options.getJSONObject("track")), options.optBoolean("autoplay"));
-                    if (current != null) record(current, position(), length(), false, true);
+                    recordSelection();
                     break;
                 case "toggle":
                     toggle();
@@ -280,7 +280,10 @@ public class PlaybackService extends MediaSessionService {
         if (tracks == null) return;
         for (int i = 0; i < tracks.length(); i++) {
             Track track = Track.from(tracks.optJSONObject(i));
-            if (track != null && !pending.containsKey(changeKey(track.episode, true))) queue.add(track);
+            if (track == null || (current != null && current.id().equals(track.id()))) continue;
+            JSONObject progress = pending.get(changeKey(track.episode, false));
+            if (pending.containsKey(changeKey(track.episode, true)) || (progress != null && progress.optBoolean("selected"))) continue;
+            queue.add(track);
         }
     }
 
@@ -296,6 +299,7 @@ public class PlaybackService extends MediaSessionService {
                 player.clearMediaItems();
                 return;
             }
+            queue.removeIf(waiting -> waiting.id().equals(track.id()));
 
             File file = downloads.audio(track.episode.optString("id"));
             Uri uri;
@@ -354,13 +358,11 @@ public class PlaybackService extends MediaSessionService {
     private void finishEpisode() {
         Track finished = current;
         long duration = length();
-        String id = finished.episode.optString("id");
-        for (Iterator<Track> tracks = queue.iterator(); tracks.hasNext();) {
-            if (tracks.next().episode.optString("id").equals(id)) tracks.remove();
-        }
         pending.remove(changeKey(finished.episode, false));
-        select(queue.isEmpty() ? null : queue.get(0), !queue.isEmpty());
+        Track next = queue.isEmpty() ? null : queue.get(0);
+        select(next, next != null);
         record(finished, duration, duration, true, true);
+        recordSelection();
     }
 
     private void checkpoint(boolean urgent) {
@@ -370,6 +372,14 @@ public class PlaybackService extends MediaSessionService {
     }
 
     private void record(Track track, long time, long duration, boolean finished, boolean urgent) {
+        record(track, time, duration, finished, urgent, false);
+    }
+
+    private void recordSelection() {
+        if (current != null) record(current, position(), length(), false, true, true);
+    }
+
+    private void record(Track track, long time, long duration, boolean finished, boolean urgent, boolean selected) {
         String key = changeKey(track.episode, finished);
         JSONObject previous = pending.remove(key);
         boolean urgentChange = urgent || (previous != null && previous.optBoolean("urgent"));
@@ -377,6 +387,7 @@ public class PlaybackService extends MediaSessionService {
         JSONObject change = new JSObject().put("episode", track.episode)
             .put("time", time / 1000.0).put("duration", duration / 1000.0)
             .put("updated", updated).put("finished", finished)
+            .put("selected", selected || (previous != null && previous.optBoolean("selected")))
             .put("lastPlayed", finished ? updated : lastPlayed)
             .put("urgent", urgentChange).put("revision", ++revision);
         pending.put(key, change);
@@ -434,6 +445,10 @@ public class PlaybackService extends MediaSessionService {
         Track at(long time) {
             return new Track(new JSObject().put("episode", episode).put("time", time / 1000.0)
                 .put("artworkUrl", data.optString("artworkUrl")).put("podcastTitle", data.optString("podcastTitle")), episode, time);
+        }
+
+        String id() {
+            return episode.optString("id");
         }
     }
 }
