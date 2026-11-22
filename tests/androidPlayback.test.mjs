@@ -51,3 +51,24 @@ test('a pending native checkpoint preserves newer listening progress from Drive'
   assert.equal(restored.playbackProgress[first.audioUrl], recent);
   assert.equal(restored.playbackProgress[second.audioUrl].currentTime, 15);
 });
+
+test('recently played survives a completion and ignores seek-only or older checkpoints', () => {
+  const firstTrack = { ...first, podcastId: 'feed-a' };
+  const secondTrack = { ...second, podcastId: 'feed-b' };
+  const state = { ...INITIAL_STATE, podcastLastPlayed: { 'feed-a': 50 } };
+  const seekOnly = applyAndroidPlayback(state, {
+    episode: secondTrack,
+    changes: [{ episode: secondTrack, time: 15, duration: 60, updated: 100, lastPlayed: 0 }],
+  });
+  assert.deepEqual(seekOnly.podcastLastPlayed, { 'feed-a': 50 });
+
+  const completed = applyAndroidPlayback(seekOnly, {
+    episode: null,
+    changes: [
+      { episode: secondTrack, finished: true, updated: 200, lastPlayed: 200 },
+      { episode: firstTrack, time: 15, duration: 60, updated: 210, lastPlayed: 25 },
+    ],
+  });
+  assert.deepEqual(completed.podcastLastPlayed, { 'feed-a': 50, 'feed-b': 200 });
+  assert.equal(completed.playbackProgress[secondTrack.audioUrl], undefined);
+});

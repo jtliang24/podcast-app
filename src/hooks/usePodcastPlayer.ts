@@ -4,6 +4,7 @@ import { getAudioBlob } from '../services/storageService';
 import { resumePoint } from '../services/driveSync';
 import type { ResumePoint } from '../services/driveSync';
 import type { StateUpdate } from '../services/profileChanges';
+import { recordPodcastPlay } from '../services/subscriptionSort';
 
 export interface UsePodcastPlayerProps {
   profile: string;
@@ -64,6 +65,8 @@ export function usePodcastPlayer({
     void updateState(prev => ({
       ...prev, lastPlayingEpisode: episode,
       playbackProgress: { ...prev.playbackProgress, [episodeUrl]: progress },
+      podcastLastPlayed: enqueue ? recordPodcastPlay(prev.podcastLastPlayed, episode.podcastId, progress.lastUpdated)
+        : prev.podcastLastPlayed,
       queue: enqueue && prev.queue[0]?.id !== episode.id
         ? [episode, ...prev.queue.filter(e => e.id !== episode.id)] : prev.queue,
     }), urgent);
@@ -275,12 +278,14 @@ export function usePodcastPlayer({
     const queue = state.queue.filter(e => e.id !== episode.id);
     const index = state.queue.findIndex(e => e.id === episode.id);
     const next = state.queue[index + 1] ?? queue[0] ?? null;
+    const finishedAt = Date.now();
     // Remove the finished episode from the queue and its saved position in one edit.
     void updateState(prev => {
       const playbackProgress = { ...prev.playbackProgress };
       delete playbackProgress[episode.audioUrl];
       return {
         ...prev, playbackProgress, lastPlayingEpisode: next,
+        podcastLastPlayed: recordPodcastPlay(prev.podcastLastPlayed, episode.podcastId, finishedAt),
         queue: prev.queue.filter(e => e.id !== episode.id),
         playedEpisodes: { ...prev.playedEpisodes, [episode.id]: true },
       };

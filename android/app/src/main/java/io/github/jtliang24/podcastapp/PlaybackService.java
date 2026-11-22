@@ -65,6 +65,7 @@ public class PlaybackService extends MediaSessionService {
     private Track current;
     private long revision;
     private boolean hasPlayed;
+    private long lastPlayed;
     private boolean replacing;
     private boolean invalidSource;
 
@@ -97,7 +98,10 @@ public class PlaybackService extends MediaSessionService {
             @Override
             public void onIsPlayingChanged(boolean playing) {
                 if (replacing) return;
-                if (playing) hasPlayed = true;
+                if (playing) {
+                    hasPlayed = true;
+                    lastPlayed = System.currentTimeMillis();
+                }
                 if (playing || !player.getPlayWhenReady() || player.getPlaybackSuppressionReason() != Player.PLAYBACK_SUPPRESSION_REASON_NONE) {
                     checkpoint(true);
                 }
@@ -285,6 +289,7 @@ public class PlaybackService extends MediaSessionService {
             player.pause();
             current = track;
             hasPlayed = false;
+            lastPlayed = 0;
             invalidSource = false;
             if (track == null) {
                 player.clearMediaItems();
@@ -367,9 +372,11 @@ public class PlaybackService extends MediaSessionService {
         String key = changeKey(track.episode, finished);
         JSONObject previous = pending.remove(key);
         boolean urgentChange = urgent || (previous != null && previous.optBoolean("urgent"));
+        long updated = System.currentTimeMillis();
         JSONObject change = new JSObject().put("episode", track.episode)
             .put("time", time / 1000.0).put("duration", duration / 1000.0)
-            .put("updated", System.currentTimeMillis()).put("finished", finished)
+            .put("updated", updated).put("finished", finished)
+            .put("lastPlayed", finished ? updated : lastPlayed)
             .put("urgent", urgentChange).put("revision", ++revision);
         pending.put(key, change);
         saveJournal();

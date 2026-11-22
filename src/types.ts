@@ -5,6 +5,7 @@ export interface Podcast {
   feedUrl: string;
   artworkUrl: string;
   description: string;
+  addedAt?: number;
 }
 
 export interface Episode {
@@ -26,6 +27,8 @@ export interface PlaybackProgress {
 }
 
 export type SortOrder = 'newest' | 'oldest' | 'a-z' | 'z-a' | 'longest' | 'shortest';
+export type SubscriptionSortField = 'release-date' | 'title' | 'date-added' | 'recently-played';
+export type SubscriptionSortDirection = 'ascending' | 'descending';
 
 export type CellularDownload = 'yes' | 'no' | 'ask';
 export const SKIP_INTERVALS = [10, 15, 30, 60] as const;
@@ -38,6 +41,10 @@ export interface AppState {
   newReleases: Episode[];
   lastRefresh?: number;
   podcastSortOrders: Record<string, SortOrder>;
+  subscriptionSortField?: SubscriptionSortField;
+  subscriptionSortDirection?: SubscriptionSortDirection;
+  podcastReleaseDates?: Record<string, number | null>;
+  podcastLastPlayed?: Record<string, number>;
   playedEpisodes: Record<string, boolean>;
   hidePlayedEpisodes: Record<string, boolean>;
   lastPlayingEpisode?: Episode | null;

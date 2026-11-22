@@ -1,17 +1,21 @@
 import { INITIAL_STATE } from '../types.ts';
 import type { AppState, Podcast } from '../types.ts';
 
-const maps = ['playbackProgress', 'podcastSortOrders', 'playedEpisodes', 'hidePlayedEpisodes'] as const;
+const maps = [
+  'playbackProgress', 'podcastSortOrders', 'playedEpisodes', 'hidePlayedEpisodes',
+  'podcastReleaseDates', 'podcastLastPlayed',
+] as const;
 const fields = [
   'queue', 'newReleases', 'lastRefresh', 'lastPlayingEpisode',
   'cellularDownload', 'autoDownloadQueued', 'skipBackwardSeconds', 'skipForwardSeconds',
+  'subscriptionSortField', 'subscriptionSortDirection',
 ] as const;
 type MapField = typeof maps[number];
 type ScalarField = typeof fields[number];
 
 type Change =
   | { field: 'subscriptions'; key: string; value?: Podcast }
-  | { [K in MapField]: { field: K; key: string; value?: AppState[K][string] } }[MapField]
+  | { [K in MapField]: { field: K; key: string; value?: NonNullable<AppState[K]>[string] } }[MapField]
   | { [K in ScalarField]: { field: K; key?: never; value?: AppState[K] } }[ScalarField];
 
 interface Stamp {
@@ -58,7 +62,7 @@ export function recordEdit(profile: Profile, update: StateUpdate, device: string
     diffEntries('subscriptions', byFeed(before.subscriptions), byFeed(after.subscriptions), changes);
   }
   for (const field of maps) {
-    if (before[field] !== after[field]) diffEntries(field, before[field], after[field], changes);
+    if (before[field] !== after[field]) diffEntries(field, before[field] ?? {}, after[field] ?? {}, changes);
   }
   for (const field of fields) {
     // Stamp the session pointer with its checkpoint even when the episode is unchanged.

@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { 
   Upload, Download, HardDrive, Clock, Trash2, 
   FileJson, Save 
 } from 'lucide-react';
-import type { AppState, Podcast } from '../types';
+import type { AppState, Podcast, SubscriptionSortDirection, SubscriptionSortField } from '../types';
+import { sortSubscriptions } from '../services/subscriptionSort';
 
 interface SidebarProps {
   state: AppState;
+  onSubscriptionSortChange: (change: Pick<AppState, 'subscriptionSortField' | 'subscriptionSortDirection'>) => void;
   viewMode: 'search' | 'downloads' | 'new-releases';
   setViewMode: (mode: 'search' | 'downloads' | 'new-releases') => void;
   selectedPodcast: Podcast | null;
@@ -26,6 +28,7 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({
   state,
+  onSubscriptionSortChange,
   viewMode,
   setViewMode,
   selectedPodcast,
@@ -37,6 +40,17 @@ const Sidebar: React.FC<SidebarProps> = ({
   exportState,
   androidFileActions,
 }) => {
+  const {
+    subscriptions, subscriptionSortField = 'release-date', subscriptionSortDirection = 'descending',
+    podcastReleaseDates, podcastLastPlayed, newReleases,
+  } = state;
+  const sortedSubscriptions = useMemo(
+    () => sortSubscriptions(subscriptions, subscriptionSortField, subscriptionSortDirection,
+      podcastReleaseDates, podcastLastPlayed, newReleases),
+    [subscriptions, subscriptionSortField, subscriptionSortDirection, podcastReleaseDates, podcastLastPlayed, newReleases],
+  );
+  const selectClass = 'min-w-0 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-200';
+
   return (
     <aside className="h-full w-full md:w-64 border-r border-slate-800 flex flex-col bg-slate-900">
       <div className="p-6 border-b border-slate-800 font-bold flex justify-between items-center">
@@ -69,8 +83,31 @@ const Sidebar: React.FC<SidebarProps> = ({
          </button>
       </div>
 
+      <div className="grid grid-cols-[1.25fr_1fr] gap-2 border-b border-slate-800 px-3 py-2">
+        <select
+          aria-label="Sort podcasts by"
+          className={selectClass}
+          value={subscriptionSortField}
+          onChange={e => onSubscriptionSortChange({ subscriptionSortField: e.target.value as SubscriptionSortField })}
+        >
+          <option value="release-date">Release Date</option>
+          <option value="title">Title</option>
+          <option value="date-added">Date Added</option>
+          <option value="recently-played">Recently Played</option>
+        </select>
+        <select
+          aria-label="Podcast sort direction"
+          className={selectClass}
+          value={subscriptionSortDirection}
+          onChange={e => onSubscriptionSortChange({ subscriptionSortDirection: e.target.value as SubscriptionSortDirection })}
+        >
+          <option value="ascending">Ascending</option>
+          <option value="descending">Descending</option>
+        </select>
+      </div>
+
       <div className="flex-1 overflow-y-auto custom-scrollbar">
-        {state.subscriptions.map(p => (
+        {sortedSubscriptions.map(p => (
           <div key={p.feedUrl} className="group relative">
             <button 
               onClick={() => selectPodcast(p)} 

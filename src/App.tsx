@@ -8,6 +8,7 @@ import { useDownloadPolicy, useDownloadStorage } from './hooks/useDownloads';
 import { AndroidFiles, isAndroid } from './services/android';
 import { fetchPodcastFeed, PrivateFeedError, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
 import { getPreferences } from './services/preferences';
+import { latestEpisodeRelease, releaseDatesByPodcast } from './services/subscriptionSort';
 import type { Podcast, Episode, SortOrder, AppState } from './types';
 import { Loader2, FolderOpen, Plus, Cloud, X } from 'lucide-react';
 import { INITIAL_STATE } from './types';
@@ -145,6 +146,8 @@ function Library({ storage, profile, downloads }: {
   const [allEpisodes, setAllEpisodes] = useState<Episode[]>([]);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [isRefreshingNewReleases, setIsRefreshingNewReleases] = useState(false);
+  const attemptedReleaseDateBackfill = useRef(false);
+  const releasesRequestInFlight = useRef(false);
   
   const [showLibrary, setShowLibrary] = useState(false);
   const { downloadsReady, downloadedEpisodes, downloadingIds, removeDownload } = downloads;
@@ -245,6 +248,32 @@ function Library({ storage, profile, downloads }: {
     setSearchResults(results);
   };
 
+  const addSubscription = async (podcast: Podcast, episodes?: Episode[]) => {
+    const addedAt = Date.now();
+    const releaseDate = episodes ? latestEpisodeRelease(episodes) : undefined;
+    let added = false;
+    await updateState(prev => {
+      if (prev.subscriptions.some(s => s.feedUrl === podcast.feedUrl)) return prev;
+      added = true;
+      return {
+        ...prev,
+        subscriptions: [...prev.subscriptions, { ...podcast, addedAt }],
+        podcastReleaseDates: releaseDate === undefined ? prev.podcastReleaseDates
+          : { ...prev.podcastReleaseDates, [podcast.feedUrl]: releaseDate },
+      };
+    });
+    return added;
+  };
+
+  const savePodcastReleaseDate = (feedUrl: string, episodes: Episode[]) => {
+    const releaseDate = latestEpisodeRelease(episodes);
+    void updateState(prev => {
+      if (prev.podcastReleaseDates?.[feedUrl] === releaseDate
+        || !prev.subscriptions.some(podcast => podcast.feedUrl === feedUrl)) return prev;
+      return { ...prev, podcastReleaseDates: { ...prev.podcastReleaseDates, [feedUrl]: releaseDate } };
+    });
+  };
+
   const handleAddByUrl = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!urlInput) return;
@@ -252,16 +281,7 @@ function Library({ storage, profile, downloads }: {
     setIsAddingByUrl(true);
     try {
       const { podcast, episodes } = await fetchPodcastFeed(urlInput.trim());
-      let alreadySubscribed = false;
-      await updateState(prev => {
-        if (prev.subscriptions.some(s => s.feedUrl === podcast.feedUrl)) {
-          alreadySubscribed = true;
-          return prev;
-        }
-        return { ...prev, subscriptions: [...prev.subscriptions, podcast] };
-      });
-      
-      if (alreadySubscribed) {
+      if (!await addSubscription(podcast, episodes)) {
         setError('Already subscribed to this podcast');
         setIsAddingByUrl(false);
         return;
@@ -278,13 +298,16 @@ function Library({ storage, profile, downloads }: {
   };
 
   const handleSubscribe = async (podcast: Podcast) => {
-    updateState(prev => {
-      if (prev.subscriptions.some(s => s.feedUrl === podcast.feedUrl)) return prev;
-      return { ...prev, subscriptions: [...prev.subscriptions, podcast] };
-    });
     setSearchResults([]);
     setSearchQuery('');
     setSelectedEpisode(null);
+    if (!await addSubscription(podcast)) return;
+    try {
+      const { episodes } = await fetchPodcastFeed(podcast.feedUrl);
+      savePodcastReleaseDate(podcast.feedUrl, episodes);
+    } catch {
+      // Keep the subscription and let the next feed refresh retry.
+    }
   };
 
   const handleUnsubscribe = async (feedUrl: string) => {
@@ -330,6 +353,7 @@ function Library({ storage, profile, downloads }: {
 
     try {
       const fetchedEpisodes = loadedEpisodes ?? (await fetchPodcastFeed(podcast.feedUrl)).episodes;
+      if (!loadedEpisodes) savePodcastReleaseDate(podcast.feedUrl, fetchedEpisodes);
       if (activeFeedRef.current !== podcast.feedUrl) return;
 
       const order = state.podcastSortOrders[podcast.feedUrl] || 'newest';
@@ -417,7 +441,9 @@ function Library({ storage, profile, downloads }: {
 
   // New Releases Logic
   const loadNewReleases = useCallback(async () => {
-    if (!navigator.onLine || state.subscriptions.length === 0) return;
+    if (!navigator.onLine || state.subscriptions.length === 0 || releasesRequestInFlight.current) return;
+    attemptedReleaseDateBackfill.current = true;
+    releasesRequestInFlight.current = true;
     setIsRefreshingNewReleases(true);
     try {
       const allNewEpisodes: Episode[] = [];
@@ -429,9 +455,12 @@ function Library({ storage, profile, downloads }: {
           batch.map(sub => fetchPodcastFeed(sub.feedUrl))
         );
         
+        const releaseDates: Record<string, number | null> = {};
         results.forEach(result => {
           if (result.status === 'fulfilled') {
-            allNewEpisodes.push(...result.value.episodes.slice(0, 10));
+            const { podcast, episodes } = result.value;
+            releaseDates[podcast.feedUrl] = latestEpisodeRelease(episodes);
+            allNewEpisodes.push(...episodes.slice(0, 10));
           }
         });
 
@@ -446,7 +475,12 @@ function Library({ storage, profile, downloads }: {
 
         updateState(prev => ({ 
           ...prev, 
-          newReleases: currentSorted.slice(0, 100)
+          newReleases: currentSorted.slice(0, 100),
+          podcastReleaseDates: {
+            ...Object.fromEntries(releaseDatesByPodcast(prev.newReleases)),
+            ...prev.podcastReleaseDates,
+            ...releaseDates,
+          },
         }));
       }
       
@@ -457,14 +491,17 @@ function Library({ storage, profile, downloads }: {
     } catch (err) {
       console.error('Error loading new releases:', err);
     } finally {
+      releasesRequestInFlight.current = false;
       setIsRefreshingNewReleases(false);
     }
   }, [state.subscriptions, updateState]);
 
+  const needsReleaseDates = state.subscriptions.some(podcast => state.podcastReleaseDates?.[podcast.feedUrl] === undefined);
   useEffect(() => {
     const ONE_HOUR = 60 * 60 * 1000;
     const now = Date.now();
-    const shouldRefresh = !state.lastRefresh || (now - state.lastRefresh > ONE_HOUR);
+    const shouldRefresh = (needsReleaseDates && !attemptedReleaseDateBackfill.current)
+      || !state.lastRefresh || (now - state.lastRefresh > ONE_HOUR);
     
     if (state.subscriptions.length > 0 && shouldRefresh && storageMode) {
       const timer = setTimeout(() => {
@@ -472,7 +509,7 @@ function Library({ storage, profile, downloads }: {
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [state.subscriptions.length, state.lastRefresh, storageMode, loadNewReleases]);
+  }, [state.subscriptions.length, state.lastRefresh, needsReleaseDates, storageMode, loadNewReleases]);
 
   useEffect(() => {
     if (viewMode === 'new-releases' && state.newReleases.length === 0 && state.subscriptions.length > 0) {
@@ -550,14 +587,8 @@ function Library({ storage, profile, downloads }: {
       const url = feedUrls[i];
       setImportingStatus(`Importing ${i + 1}/${feedUrls.length}`);
       try {
-        const { podcast } = await fetchPodcastFeed(url);
-        let wasAdded = false;
-        await updateState(prev => {
-          if (prev.subscriptions.some(s => s.feedUrl === url)) return prev;
-          wasAdded = true;
-          return { ...prev, subscriptions: [...prev.subscriptions, podcast] };
-        });
-        if (wasAdded) updatedCount++;
+        const { podcast, episodes } = await fetchPodcastFeed(url);
+        if (await addSubscription(podcast, episodes)) updatedCount++;
       } catch (err) {
         console.error('Failed to import podcast feed:', err);
         failCount++;
@@ -654,6 +685,7 @@ function Library({ storage, profile, downloads }: {
       <div className={showLibrary ? 'fixed inset-x-0 top-12 bottom-32 z-40 overflow-auto bg-slate-900 md:static md:block' : 'hidden md:block'}>
         <Sidebar
           state={state}
+          onSubscriptionSortChange={change => void updateState(prev => ({ ...prev, ...change }))}
           viewMode={viewMode}
           setViewMode={mode => { switchView(mode); setShowLibrary(false); }}
           selectedPodcast={selectedPodcast}

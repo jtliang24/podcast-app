@@ -17,6 +17,7 @@ export interface PlaybackChange {
   duration: number;
   updated: number;
   finished?: boolean;
+  lastPlayed?: number;
 }
 
 export interface AndroidPlaybackState {
