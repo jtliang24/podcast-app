@@ -1,6 +1,6 @@
 import type { AppState, Episode } from '../types.ts';
 import { accessProfile } from './profileStore.ts';
-import { applyBatch, recordEdit, seedProfile } from './profileChanges.ts';
+import { applyBatch, coalescePlaybackCheckpoints, recordEdit, seedProfile } from './profileChanges.ts';
 import type { Batch, Profile, StateUpdate } from './profileChanges.ts';
 import { allocateFileId, downloadStateFile, DriveError, listBatches, uploadBatch } from './driveService.ts';
 
@@ -48,7 +48,10 @@ export class DriveSync {
   }
 
   async edit(update: StateUpdate, urgent = false) {
-    const profile = await this.store(this.id, p => recordEdit(p, update, this.device, urgent));
+    const profile = await this.store(this.id, p => {
+      recordEdit(p, update, this.device, urgent);
+      if (p.pending.length > 1) coalescePlaybackCheckpoints(p);
+    });
     if (this.stopped) return;
     this.events.state(profile.state);
     if (profile.pending.length) this.schedule(urgent ? 0 : 500);
@@ -80,7 +83,7 @@ export class DriveSync {
 
   private async run() {
     const token = this.token;
-    if (!token || this.stopped) return;
+    if (!token || this.stopped || !navigator.onLine) return;
     this.running = true;
     this.events.status('Syncing');
     try {
@@ -94,6 +97,8 @@ export class DriveSync {
           profile = await this.store(this.id, p => seedProfile(p, snapshot));
           if (!this.stopped) this.events.state(profile.state);
         }
+        // Compact checkpoints already queued by older versions of the app.
+        if (profile.pending.length > 1) profile = await this.store(this.id, coalescePlaybackCheckpoints);
         await this.flush(token, profile);
         if (pull && !this.stopped) await this.pullChanges(token);
       }
@@ -119,7 +124,8 @@ export class DriveSync {
   }
 
   private async flush(token: string, profile: Profile) {
-    while (profile.pending.length && !this.stopped) {
+    // Give a foreground pull a turn even when playback keeps adding checkpoints.
+    for (let remaining = 10; remaining > 0 && profile.pending.length && !this.stopped; remaining--) {
       const entry = profile.pending.find(p => p.urgent) ?? profile.pending[0];
       let fileId = entry.fileId;
       if (!fileId) {
@@ -136,6 +142,7 @@ export class DriveSync {
         p.pending = p.pending.filter(item => item.batch.id !== entry.batch.id);
       });
     }
+    if (profile.pending.length) this.requested = true;
   }
 
   private async pullChanges(token: string) {

@@ -73,6 +73,26 @@ export function recordEdit(profile: Profile, update: StateUpdate, device: string
   }
 }
 
+export function coalescePlaybackCheckpoints(profile: Profile) {
+  const latest = new Map<string, Profile['pending'][number]>();
+  // Each newer checkpoint for an episode replaces both fields of its older checkpoints.
+  profile.pending = profile.pending.slice().reverse().filter(entry => {
+    const { changes } = entry.batch;
+    if (changes.length !== 2) return true;
+    const progress = changes.find(change => change.field === 'playbackProgress');
+    const session = changes.find(change => change.field === 'lastPlayingEpisode');
+    if (!progress?.value || session?.value?.audioUrl !== progress.key) return true;
+
+    const newer = latest.get(progress.key);
+    if (newer) {
+      newer.urgent ||= entry.urgent;
+      return false;
+    }
+    latest.set(progress.key, entry);
+    return true;
+  }).reverse();
+}
+
 export function applyBatch(profile: Profile, batch: Batch) {
   if (Object.hasOwn(profile.applied, batch.id)) return;
   const { time, device } = batch;

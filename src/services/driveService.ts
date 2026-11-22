@@ -2,6 +2,7 @@ import type { Batch } from './profileChanges.ts';
 
 const filesUrl = 'https://www.googleapis.com/drive/v3/files';
 const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+const requestTimeout = 15_000;
 
 export class DriveError extends Error {
   status: number;
@@ -12,12 +13,18 @@ export class DriveError extends Error {
 }
 
 async function driveFetch(accessToken: string, url: string, options: RequestInit = {}) {
-  const response = await fetch(url, {
-    ...options, headers: { Authorization: `Bearer ${accessToken}`, ...options.headers },
-    cache: 'no-store',
-  });
-  if (!response.ok) throw new DriveError(response.status);
-  return response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), requestTimeout);
+  try {
+    const response = await fetch(url, {
+      ...options, headers: { Authorization: `Bearer ${accessToken}`, ...options.headers },
+      cache: 'no-store', signal: controller.signal,
+    });
+    if (!response.ok) throw new DriveError(response.status);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 interface DriveFile { id: string; name: string }
@@ -31,8 +38,7 @@ async function listFiles(token: string, query: string) {
       fields: 'nextPageToken,files(id,name)', pageSize: '1000', orderBy: 'createdTime',
     });
     if (pageToken) params.set('pageToken', pageToken);
-    const response = await driveFetch(token, `${filesUrl}?${params}`);
-    const page = await response.json();
+    const page = JSON.parse(await driveFetch(token, `${filesUrl}?${params}`));
     files.push(...page.files);
     pageToken = page.nextPageToken;
   } while (pageToken);
@@ -44,9 +50,8 @@ export async function searchStateFile(token: string, expected?: string | null) {
   return (expected ? files.find(file => file.id === expected) : files[0])?.id ?? null;
 }
 
-export async function downloadStateFile(token: string, fileId: string) {
-  const response = await driveFetch(token, `${filesUrl}/${encodeURIComponent(fileId)}?alt=media`);
-  return response.text();
+export function downloadStateFile(token: string, fileId: string) {
+  return driveFetch(token, `${filesUrl}/${encodeURIComponent(fileId)}?alt=media`);
 }
 
 async function createFile(token: string, metadata: object, content: string): Promise<string> {
@@ -57,7 +62,7 @@ async function createFile(token: string, metadata: object, content: string): Pro
   const response = await driveFetch(token, uploadUrl, {
     method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
   });
-  return (await response.json()).id;
+  return JSON.parse(response).id;
 }
 
 export function createStateFile(token: string, content: string) {
@@ -66,7 +71,9 @@ export function createStateFile(token: string, content: string) {
 
 export async function allocateFileId(token: string): Promise<string> {
   const response = await driveFetch(token, `${filesUrl}/generateIds?count=1&space=appDataFolder`);
-  return (await response.json()).ids[0];
+  const id = JSON.parse(response).ids?.[0];
+  if (typeof id !== 'string' || !id) throw new Error('Drive did not reserve a file ID');
+  return id;
 }
 
 export async function listBatches(token: string, profileId: string) {
