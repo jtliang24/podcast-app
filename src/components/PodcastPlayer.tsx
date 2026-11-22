@@ -47,6 +47,8 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
 }) => {
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const nowPlayingRef = useRef<HTMLDialogElement>(null);
+  const hasDuration = Number.isFinite(duration) && duration > 0;
+  const progress = hasDuration && Number.isFinite(currentTime) ? currentTime / duration : 0;
 
   return (
     <footer className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-3 md:p-6 z-50">
@@ -184,17 +186,11 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
           </div>
         </div>
 
-        <div className="w-full max-w-2xl px-4 flex items-center group">
-          <input 
-            aria-label="Playback position"
-            type="range"
-            min="0"
-            max={duration || 0}
-            step="0.1"
-            value={currentTime}
-            onChange={event => seek(event.currentTarget.valueAsNumber)}
-            disabled={!currentEpisode}
-            className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 hover:accent-blue-400 disabled:opacity-30 disabled:cursor-default transition-all"
+        <div className="w-full max-w-2xl px-4 flex items-center">
+          <progress
+            aria-label="Playback progress"
+            value={currentEpisode ? progress : 0}
+            className="h-1 w-full appearance-none overflow-hidden rounded-lg bg-slate-800 [&::-webkit-progress-bar]:bg-slate-800 [&::-webkit-progress-value]:bg-blue-500 [&::-moz-progress-bar]:bg-blue-500"
           />
         </div>
       </div>
