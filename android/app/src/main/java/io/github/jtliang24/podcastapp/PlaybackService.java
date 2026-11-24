@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -19,9 +20,13 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.session.CommandButton;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
+import androidx.media3.session.SessionCommand;
+import androidx.media3.session.SessionResult;
 import com.getcapacitor.JSObject;
+import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.io.File;
@@ -38,6 +43,8 @@ import org.json.JSONObject;
 public class PlaybackService extends MediaSessionService {
     static final String LOCAL_BIND = "io.github.jtliang24.podcastapp.PLAYBACK";
     private static final int CHECKPOINT_INTERVAL_MS = 10_000;
+    private static final SessionCommand SKIP_BACK = new SessionCommand("podcast.skip_back", Bundle.EMPTY);
+    private static final SessionCommand SKIP_FORWARD = new SessionCommand("podcast.skip_forward", Bundle.EMPTY);
 
     final class LocalBinder extends Binder {
         PlaybackService service() {
@@ -68,6 +75,7 @@ public class PlaybackService extends MediaSessionService {
     private long lastPlayed;
     private boolean replacing;
     private boolean invalidSource;
+    private boolean skipButtonsVisible;
 
     @Override
     public void onCreate() {
@@ -90,11 +98,37 @@ public class PlaybackService extends MediaSessionService {
                     return new MediaSession.ConnectionResult.AcceptedResultBuilder(mediaSession)
                         .setAvailablePlayerCommands(MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
                             .remove(Player.COMMAND_CHANGE_MEDIA_ITEMS).remove(Player.COMMAND_SET_MEDIA_ITEM).build())
+                        .setAvailableSessionCommands(MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                            .add(SKIP_BACK).add(SKIP_FORWARD).build())
                         .build();
+                }
+
+                @Override
+                public ListenableFuture<SessionResult> onCustomCommand(MediaSession mediaSession,
+                        MediaSession.ControllerInfo controller, SessionCommand command, Bundle args) {
+                    boolean backward = SKIP_BACK.equals(command);
+                    if (!backward && !SKIP_FORWARD.equals(command)) {
+                        return MediaSession.Callback.super.onCustomCommand(mediaSession, controller, command, args);
+                    }
+                    if (!player.isCommandAvailable(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)) {
+                        return Futures.immediateFuture(new SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE));
+                    }
+                    if (backward) sessionPlayer.seekBack();
+                    else sessionPlayer.seekForward();
+                    return Futures.immediateFuture(new SessionResult(SessionResult.RESULT_SUCCESS));
                 }
             }).build();
         addSession(session);
         player.addListener(new Player.Listener() {
+            @Override
+            public void onAvailableCommandsChanged(Player.Commands commands) {
+                boolean seekable = commands.contains(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM);
+                if (skipButtonsVisible != seekable) {
+                    skipButtonsVisible = seekable;
+                    updateSkipButtons();
+                }
+            }
+
             @Override
             public void onIsPlayingChanged(boolean playing) {
                 if (replacing) return;
@@ -137,6 +171,27 @@ public class PlaybackService extends MediaSessionService {
             }
         });
         main.postDelayed(periodicCheckpoint, CHECKPOINT_INTERVAL_MS);
+    }
+
+    private void updateSkipButtons() {
+        session.setMediaButtonPreferences(skipButtonsVisible ? ImmutableList.of(
+            skipButton(true, sessionPlayer.backMs / 1000),
+            skipButton(false, sessionPlayer.forwardMs / 1000)
+        ) : ImmutableList.of());
+    }
+
+    private static CommandButton skipButton(boolean backward, long seconds) {
+        int icon = switch ((int) seconds) {
+            case 10 -> backward ? CommandButton.ICON_SKIP_BACK_10 : CommandButton.ICON_SKIP_FORWARD_10;
+            case 15 -> backward ? CommandButton.ICON_SKIP_BACK_15 : CommandButton.ICON_SKIP_FORWARD_15;
+            case 30 -> backward ? CommandButton.ICON_SKIP_BACK_30 : CommandButton.ICON_SKIP_FORWARD_30;
+            default -> backward ? CommandButton.ICON_SKIP_BACK : CommandButton.ICON_SKIP_FORWARD;
+        };
+        return new CommandButton.Builder(icon)
+            .setDisplayName("Skip " + (backward ? "back " : "forward ") + seconds + " seconds")
+            .setSessionCommand(backward ? SKIP_BACK : SKIP_FORWARD)
+            .setSlots(backward ? CommandButton.SLOT_BACK : CommandButton.SLOT_FORWARD)
+            .build();
     }
 
     @Override
@@ -218,6 +273,7 @@ public class PlaybackService extends MediaSessionService {
             backMs = back;
             forwardMs = forward;
             invalidateState();
+            updateSkipButtons();
         }
 
         private long seekIncrement(int seconds, long fallback) {
