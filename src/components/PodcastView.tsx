@@ -52,16 +52,16 @@ const PodcastView: React.FC<PodcastViewProps> = ({
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex items-end justify-between space-x-8 mb-12">
-        <div className="flex items-end space-x-8">
-          <img src={selectedPodcast.artworkUrl} className="w-48 h-48 rounded-2xl shadow-2xl bg-slate-800" alt="" />
-          <div className="pb-2">
-            <h1 className="text-4xl font-black mb-2 tracking-tight">{selectedPodcast.title}</h1>
+      <div className="mb-12 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between lg:gap-8">
+        <div className="flex min-w-0 items-start gap-4 sm:items-end sm:gap-8">
+          <img src={selectedPodcast.artworkUrl} className="h-20 w-20 shrink-0 rounded-2xl shadow-2xl bg-slate-800 sm:h-32 sm:w-32 xl:h-48 xl:w-48" alt="" />
+          <div className="min-w-0 pb-2 [overflow-wrap:anywhere]">
+            <h1 className="text-2xl font-black mb-2 tracking-tight sm:text-4xl">{selectedPodcast.title}</h1>
             <p className="text-slate-400 font-bold">{selectedPodcast.author}</p>
           </div>
         </div>
         
-        <div className="pb-2 flex items-center space-x-4">
+        <div className="flex shrink-0 flex-wrap items-center gap-3 pb-2 lg:max-w-[45%]">
           <label className="flex items-center space-x-2 text-sm text-slate-400 cursor-pointer hover:text-white transition-colors">
             <input 
               type="checkbox" 
@@ -72,9 +72,10 @@ const PodcastView: React.FC<PodcastViewProps> = ({
             <span>Hide Played</span>
           </label>
           <select 
+            aria-label="Sort episodes"
             value={state.podcastSortOrders[selectedPodcast.feedUrl] || 'newest'} 
             onChange={(e) => handleSortChange(e.target.value as SortOrder)}
-            className="bg-slate-900 border border-slate-800 text-slate-300 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none cursor-pointer hover:bg-slate-800 transition-colors"
+            className="block min-w-0 max-w-full bg-slate-900 border border-slate-800 text-slate-300 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 p-2.5 outline-none cursor-pointer hover:bg-slate-800 transition-colors"
           >
             <option value="newest">Newest to Oldest</option>
             <option value="oldest">Oldest to Newest</option>

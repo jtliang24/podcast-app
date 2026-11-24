@@ -108,16 +108,16 @@ const Sidebar: React.FC<SidebarProps> = ({
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         {sortedSubscriptions.map(p => (
-          <div key={p.feedUrl} className="group relative">
+          <div key={p.feedUrl} className="grid grid-cols-[minmax(0,1fr)_auto] items-center pr-2">
             <button 
               onClick={() => selectPodcast(p)} 
-              className={`w-full text-left p-4 hover:bg-white/5 flex items-center space-x-3 transition-colors ${viewMode === 'search' && selectedPodcast?.feedUrl === p.feedUrl ? 'bg-white/10' : ''}`}
+              className={`min-w-0 text-left py-4 pl-4 pr-2 hover:bg-white/5 flex items-center gap-3 transition-colors ${viewMode === 'search' && selectedPodcast?.feedUrl === p.feedUrl ? 'bg-white/10' : ''}`}
             >
-              <img src={p.artworkUrl} className="w-10 h-10 rounded shadow-lg bg-slate-800" alt="" />
-              <div className="truncate text-xs font-bold">{p.title}</div>
+              <img src={p.artworkUrl} className="w-10 h-10 shrink-0 rounded shadow-lg bg-slate-800" alt="" />
+              <span className="min-w-0 truncate text-xs font-bold">{p.title}</span>
             </button>
-            <button onClick={(e) => { e.stopPropagation(); handleUnsubscribe(p.feedUrl); }} className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400">
-              <Trash2 size={14} />
+            <button type="button" onClick={() => handleUnsubscribe(p.feedUrl)} aria-label={`Unsubscribe from ${p.title}`} className="grid h-11 w-11 place-items-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-red-400">
+              <Trash2 size={16} aria-hidden="true" />
             </button>
           </div>
         ))}
