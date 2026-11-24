@@ -183,7 +183,7 @@ function Library({ storage, profile, downloads, connection }: {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [importingStatus, setImportingStatus] = useState<string | null>(null);
   const preferences = getPreferences(state);
-  const { skipBackwardSeconds, skipForwardSeconds } = preferences;
+  const { skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads } = preferences;
   const ready = !isLoading && !setupToken && (!isFileSystemAccessSupported || !!fileHandle || storageMode === 'google-drive');
 
   const handleDeleteDownload = useCallback(async (episodeId: string) => {
@@ -228,6 +228,7 @@ function Library({ storage, profile, downloads, connection }: {
     playbackError,
     retry,
     audioEvents,
+    playbackReady,
     hasRemoteOffer,
     togglePlay,
     skip,
@@ -237,15 +238,17 @@ function Library({ storage, profile, downloads, connection }: {
   } = usePlayer({
     state, profile, ready, skipBackwardSeconds, skipForwardSeconds,
     updateState, downloadedEpisodes, downloadsReady, remoteSession,
+    autoRemoveFinishedDownloads, finishDownload: downloads.finishDownload, refreshDownloads: downloads.refreshDownloads,
   });
   const currentId = currentEpisode?.id ?? state.lastPlayingEpisode?.id;
   const waiting = useMemo(() => currentId ? removeQueuedEpisode(state.queue, currentId) : state.queue,
     [state.queue, currentId]);
   const downloadQueue = useMemo(() => {
+    if (!playbackReady) return [];
     const episodes = orderedQueue(waiting);
     const active = currentEpisode ?? state.lastPlayingEpisode;
     return active ? [active, ...episodes] : episodes;
-  }, [waiting, currentEpisode, state.lastPlayingEpisode]);
+  }, [playbackReady, waiting, currentEpisode, state.lastPlayingEpisode]);
 
   // Download Management
   const { requestDownload: handleDownload, confirmation, answerConfirmation } = useDownloadPolicy({

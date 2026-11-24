@@ -13,6 +13,9 @@ export interface UsePodcastPlayerProps {
   ready: boolean;
   skipBackwardSeconds: SkipInterval;
   skipForwardSeconds: SkipInterval;
+  autoRemoveFinishedDownloads: boolean;
+  finishDownload: (id: string) => void;
+  refreshDownloads: () => Promise<void>;
   updateState: (update: StateUpdate, urgent?: boolean, routine?: boolean) => Promise<void | boolean>;
   downloadedEpisodes: Episode[];
   downloadsReady: boolean;
@@ -34,6 +37,7 @@ interface Selection extends ResumePoint {
 
 export function usePodcastPlayer({
   state, ready, skipBackwardSeconds, skipForwardSeconds, updateState, downloadedEpisodes, downloadsReady, remoteSession,
+  autoRemoveFinishedDownloads, finishDownload,
 }: UsePodcastPlayerProps) {
   const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
   const playingPodcast = state.subscriptions.find(s => s.feedUrl === currentEpisode?.podcastId) ?? null;
@@ -282,6 +286,12 @@ export function usePodcastPlayer({
     const finishedAt = Date.now();
     setRemoteOffer(null);
     setIsPlaying(false);
+    item.positioned = false;
+    audio.removeAttribute('src');
+    audio.load();
+    if (item.source.startsWith('blob:')) URL.revokeObjectURL(item.source);
+    item.source = '';
+    if (autoRemoveFinishedDownloads) finishDownload(episode.id);
     // Read the latest queue and persist the handoff and completion together.
     let next: ResumePoint | undefined;
     await updateState(prev => {
@@ -306,9 +316,6 @@ export function usePodcastPlayer({
       setCurrentTime(0);
       setDuration(0);
       setPlaybackError(false);
-      audio.removeAttribute('src');
-      audio.load();
-      if (item.source.startsWith('blob:')) URL.revokeObjectURL(item.source);
     }
   };
 
@@ -322,6 +329,7 @@ export function usePodcastPlayer({
 
   return {
     currentEpisode, playingPodcast, isPlaying, currentTime, duration, audioRef, offer, hasRemoteOffer: !!remoteOffer, continueListening,
+    playbackReady: true,
     playbackError, retry, togglePlay, skip, seek, formatTime, playEpisode,
     audioEvents: { onLoadedMetadata: onMetadata, onPlaying, onPause, onTimeUpdate, onEnded: handleEpisodeEnded,
       onWaiting: () => setIsPlaying(false), onEmptied: () => setIsPlaying(false), onError },

@@ -129,6 +129,13 @@ export default function SettingsButton({ preferences, onChange, onImport, onExpo
                 <option value="false">Off</option>
               </select>
             </label>
+            <label className="block space-y-1 text-sm text-slate-200">
+              <span>Automatically remove finished downloads</span>
+              <select className={selectClass} value={String(preferences.autoRemoveFinishedDownloads)} onChange={event => onChange({ autoRemoveFinishedDownloads: event.currentTarget.value === 'true' })}>
+                <option value="true">On</option>
+                <option value="false">Off</option>
+              </select>
+            </label>
           </section>
           <section aria-labelledby="playback-settings-heading" className="mt-5 space-y-3 border-t border-slate-700 pt-4">
             <h3 id="playback-settings-heading" className="font-semibold">Playback</h3>

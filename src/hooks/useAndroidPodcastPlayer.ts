@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppState, Episode } from '../types';
-import { AndroidPlayback } from '../services/android';
+import { AndroidDownloads, AndroidPlayback } from '../services/android';
 import type { AndroidPlaybackState, AndroidTrack } from '../services/android';
 import { applyAndroidPlayback } from '../services/androidPlaybackState';
 import { resumePoint } from '../services/driveSync';
@@ -22,19 +22,21 @@ function track(state: AppState, episode: Episode, time = state.playbackProgress[
 
 export function useAndroidPodcastPlayer({
   profile, ready, state, updateState, remoteSession, skipBackwardSeconds, skipForwardSeconds,
+  autoRemoveFinishedDownloads, finishDownload, refreshDownloads,
 }: UsePodcastPlayerProps) {
   const [playback, setPlayback] = useState<AndroidPlaybackState | null>(null);
   const [connectionError, setConnectionError] = useState(false);
   const [remoteOffer, setRemoteOffer] = useState<ResumePoint | null>(null);
   const [acknowledgedRevision, setAcknowledgedRevision] = useState(0);
-  const storage = useRef({ state, updateState, skipBackwardSeconds, skipForwardSeconds });
+  const storage = useRef({ state, updateState, skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads });
   const active = useRef(false);
   const operations = useRef(Promise.resolve());
   const saving = useRef(false);
+  const lastCleanupRevision = useRef(0);
 
   useEffect(() => {
-    storage.current = { state, updateState, skipBackwardSeconds, skipForwardSeconds };
-  }, [state, updateState, skipBackwardSeconds, skipForwardSeconds]);
+    storage.current = { state, updateState, skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads };
+  }, [state, updateState, skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads]);
   useEffect(() => { setRemoteOffer(remoteSession); }, [remoteSession]);
 
   const request = useCallback((command: Command | (() => Command)) => {
@@ -42,6 +44,12 @@ export function useAndroidPodcastPlayer({
       if (!active.current) return;
       const snapshot = await AndroidPlayback.control({ ...(typeof command === 'function' ? command() : command), profile });
       if (!active.current) return;
+      const cleaned = snapshot.changes.filter(change => change.downloadCleanup && (change.revision ?? 0) > lastCleanupRevision.current);
+      if (cleaned.length) {
+        lastCleanupRevision.current = snapshot.revision;
+        for (const change of cleaned) finishDownload(change.episode.id);
+        void refreshDownloads();
+      }
       setPlayback(snapshot);
       setConnectionError(false);
       if (saving.current || !snapshot.changes.length) return;
@@ -62,10 +70,10 @@ export function useAndroidPodcastPlayer({
       if (active.current) setConnectionError(true);
     });
     return operations.current;
-  }, [profile]);
+  }, [profile, finishDownload, refreshDownloads]);
 
   const open = useCallback(() => {
-    const { state, skipBackwardSeconds, skipForwardSeconds } = storage.current;
+    const { state, skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads } = storage.current;
     const point = resumePoint(state);
     return request({
       action: 'open',
@@ -74,6 +82,7 @@ export function useAndroidPodcastPlayer({
       queue: queueTracks(state),
       skipBackwardSeconds,
       skipForwardSeconds,
+      autoRemoveFinishedDownloads,
     });
   }, [request]);
 
@@ -89,18 +98,25 @@ export function useAndroidPodcastPlayer({
       void request({ action: 'snapshot' }).finally(() => { pending = false; });
     };
     const timer = window.setInterval(poll, 1000);
-    document.addEventListener('visibilitychange', poll);
+    const resume = () => { void request({ action: 'snapshot' }).then(refreshDownloads); };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') resume();
+    };
+    const listener = AndroidDownloads.addListener('resume', resume);
+    void listener.catch(() => { /* Visibility changes also refresh downloads. */ });
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       active.current = false;
       window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', poll);
+      void listener.then(handle => handle.remove()).catch(() => {});
+      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [open, ready, request]);
+  }, [open, ready, request, refreshDownloads]);
 
   const { queue, subscriptions, playbackProgress } = state;
   useEffect(() => {
-    if (ready) void request({ action: 'seekIncrements', skipBackwardSeconds, skipForwardSeconds });
-  }, [ready, request, skipBackwardSeconds, skipForwardSeconds]);
+    if (ready) void request({ action: 'preferences', skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads });
+  }, [ready, request, skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads]);
 
   useEffect(() => {
     if (ready) void request(() => ({ action: 'queue', queue: queueTracks(storage.current.state) }));
@@ -144,6 +160,7 @@ export function useAndroidPodcastPlayer({
     isPlaying: playback?.playing ?? false,
     currentTime: playback?.time ?? 0,
     duration: playback?.duration ?? 0,
+    playbackReady: playback !== null,
     playbackError: connectionError || (playback?.error ?? false),
     retry, togglePlay, skip, seek, formatTime, playEpisode,
     audioRef: null, audioEvents: {},

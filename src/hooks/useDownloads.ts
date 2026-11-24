@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { deleteDownload, downloadEpisode, getAllDownloadedEpisodes } from '../services/storageService';
+import { isAndroid } from '../services/android';
 import type { DownloadConnection } from '../services/android';
 import type { Preferences } from '../services/preferences';
 import type { Episode } from '../types';
@@ -8,38 +9,87 @@ export function useDownloadStorage() {
   const [downloadsReady, setDownloadsReady] = useState(false);
   const [downloadedEpisodes, setDownloadedEpisodes] = useState<Episode[]>([]);
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
-  const active = useRef(new Set<string>());
+  const [finishedIds, setFinishedIds] = useState<Set<string>>(new Set());
+  const active = useRef(new Map<string, { discard: boolean }>());
+  const removals = useRef(new Map<string, Promise<void>>());
+  const latestRead = useRef(0);
+
+  const refreshDownloads = useCallback(async () => {
+    const read = ++latestRead.current;
+    try {
+      const episodes = await getAllDownloadedEpisodes();
+      if (read === latestRead.current) setDownloadedEpisodes(episodes);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      if (read === latestRead.current) setDownloadsReady(true);
+    }
+  }, []);
 
   // Load downloads on mount
   useEffect(() => {
-    let mounted = true;
-    void getAllDownloadedEpisodes().then(episodes => {
-      if (mounted) setDownloadedEpisodes(episodes);
-    }).catch(console.error).finally(() => {
-      if (mounted) setDownloadsReady(true);
+    void refreshDownloads();
+  }, [refreshDownloads]);
+
+  const removeDownload = useCallback((id: string) => {
+    const existing = removals.current.get(id);
+    if (existing) return existing;
+    const removal = deleteDownload(id).then(async () => {
+      if (isAndroid) await refreshDownloads();
+      else setDownloadedEpisodes(previous => previous.filter(episode => episode.id !== id));
+    }).finally(() => { removals.current.delete(id); });
+    removals.current.set(id, removal);
+    return removal;
+  }, [refreshDownloads]);
+
+  const removeFinished = useCallback(async (id: string) => {
+    try {
+      await removeDownload(id);
+      return true;
+    } catch {
+      console.warn('Could not remove a finished download.');
+      return false;
+    }
+  }, [removeDownload]);
+
+  const finishDownload = useCallback((id: string) => {
+    setFinishedIds(previous => previous.has(id) ? previous : new Set([...previous, id]));
+    if (isAndroid) return; // The playback service owns native cleanup.
+    const attempt = active.current.get(id);
+    if (attempt) attempt.discard = true;
+    else void removeFinished(id);
+  }, [removeFinished]);
+
+  const forgetUnqueuedCompletions = useCallback((queue: Episode[]) => {
+    setFinishedIds(previous => {
+      if (!previous.size) return previous;
+      const stillQueued = new Set(queue.filter(episode => previous.has(episode.id)).map(episode => episode.id));
+      return stillQueued.size === previous.size ? previous : stillQueued;
     });
-    return () => { mounted = false; };
   }, []);
 
   const startDownload = useCallback(async (episode: Episode) => {
     if (active.current.has(episode.id)) return;
-    active.current.add(episode.id);
-    setDownloadingIds(new Set(active.current));
+    const attempt = { discard: false };
+    active.current.set(episode.id, attempt);
+    setDownloadingIds(new Set(active.current.keys()));
     try {
+      await removals.current.get(episode.id)?.catch(() => {});
       await downloadEpisode(episode);
-      setDownloadedEpisodes(previous => [...previous.filter(item => item.id !== episode.id), episode]);
+      if (isAndroid) await refreshDownloads();
+      else if (!attempt.discard || !await removeFinished(episode.id)) {
+        setDownloadedEpisodes(previous => [...previous.filter(item => item.id !== episode.id), episode]);
+      }
     } finally {
       active.current.delete(episode.id);
-      setDownloadingIds(new Set(active.current));
+      setDownloadingIds(new Set(active.current.keys()));
     }
-  }, []);
+  }, [refreshDownloads, removeFinished]);
 
-  const removeDownload = useCallback(async (id: string) => {
-    await deleteDownload(id);
-    setDownloadedEpisodes(previous => previous.filter(episode => episode.id !== id));
-  }, []);
-
-  return { downloadsReady, downloadedEpisodes, downloadingIds, startDownload, removeDownload };
+  return {
+    downloadsReady, downloadedEpisodes, downloadingIds, startDownload, removeDownload,
+    refreshDownloads, finishDownload, finishedIds, forgetUnqueuedCompletions,
+  };
 }
 
 interface DownloadRequest {
@@ -59,7 +109,7 @@ interface DownloadPolicyOptions {
 
 export function useDownloadPolicy({ connection, ready, queue, preferences, storage, onError }: DownloadPolicyOptions) {
   const { cellularDownload, autoDownloadQueued } = preferences;
-  const { downloadsReady, downloadedEpisodes, downloadingIds, startDownload } = storage;
+  const { downloadsReady, downloadedEpisodes, downloadingIds, startDownload, finishedIds, forgetUnqueuedCompletions } = storage;
   const [visible, setVisible] = useState(document.visibilityState === 'visible');
   const [dialogClosures, setDialogClosures] = useState(0);
   const [pending, setPending] = useState<DownloadRequest | null>(null);
@@ -79,6 +129,7 @@ export function useDownloadPolicy({ connection, ready, queue, preferences, stora
   }, []);
 
   useEffect(() => { attempted.current.clear(); }, [connection]);
+  useEffect(() => { forgetUnqueuedCompletions(queue); }, [queue, finishedIds, forgetUnqueuedCompletions]);
 
   const requestDownload = useCallback((episode: Episode) => {
     setPending(current => current ?? { episode, automatic: false });
@@ -97,7 +148,7 @@ export function useDownloadPolicy({ connection, ready, queue, preferences, stora
   const ask = transport === 'cellular' && cellularDownload === 'ask';
   const blocked = transport === 'cellular' && cellularDownload === 'no';
   const pendingEligible = pending && (!pending.automatic || (
-    autoDownloadQueued && queue.some(episode => episode.id === pending.episode.id)
+    autoDownloadQueued && !finishedIds.has(pending.episode.id) && queue.some(episode => episode.id === pending.episode.id)
   ));
   const confirmation = ready && downloadsReady && visible && ask && pendingEligible && pending.approvedOn !== connection
     ? pending.episode : null;
@@ -125,13 +176,13 @@ export function useDownloadPolicy({ connection, ready, queue, preferences, stora
 
     if (!autoDownloadQueued || denial || downloadingIds.size) return;
     if (ask && (!visible || document.querySelector('dialog:modal'))) return;
-    const next = queue.find(episode => !attempted.current.has(episode.id) && !unavailable(episode));
+    const next = queue.find(episode => !finishedIds.has(episode.id) && !attempted.current.has(episode.id) && !unavailable(episode));
     if (!next) return;
     const request = { episode: next, automatic: true };
     if (ask) setPending(current => current ?? request);
     else start(request);
   }, [ready, downloadsReady, connection, transport, ask, blocked, pending, pendingEligible, autoDownloadQueued,
-    visible, dialogClosures, queue, downloadingIds, downloadedEpisodes, start, onError]);
+    visible, dialogClosures, queue, downloadingIds, downloadedEpisodes, finishedIds, start, onError]);
 
   const answerConfirmation = (allow: boolean) => {
     if (!pending || !confirmation || !connection) return;

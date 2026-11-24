@@ -19,6 +19,8 @@ export interface PlaybackChange {
   finished?: boolean;
   selected?: boolean;
   lastPlayed?: number;
+  downloadCleanup?: boolean;
+  revision?: number;
 }
 
 export interface AndroidPlaybackState {
@@ -34,7 +36,7 @@ export interface AndroidPlaybackState {
 
 interface PlaybackCommand {
   profile: string;
-  action: 'open' | 'snapshot' | 'queue' | 'select' | 'toggle' | 'seek' | 'skip' | 'seekIncrements' | 'acknowledge';
+  action: 'open' | 'snapshot' | 'queue' | 'select' | 'toggle' | 'seek' | 'skip' | 'preferences' | 'acknowledge';
   queue?: AndroidTrack[];
   track?: AndroidTrack;
   autoplay?: boolean;
@@ -43,6 +45,7 @@ interface PlaybackCommand {
   updated?: number;
   skipBackwardSeconds?: number;
   skipForwardSeconds?: number;
+  autoRemoveFinishedDownloads?: boolean;
 }
 
 export interface DownloadConnection {
@@ -73,6 +76,7 @@ export const AndroidDownloads = registerPlugin<{
   download(options: { episode: Episode }): Promise<void>;
   list(): Promise<{ episodes: Episode[] }>;
   remove(options: { id: string }): Promise<void>;
+  addListener(event: 'resume', listener: () => void): Promise<PluginListenerHandle>;
 }>('PodcastDownloads');
 
 export const AndroidConnectivity = registerPlugin<{

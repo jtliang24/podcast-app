@@ -8,6 +8,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import org.json.JSONException;
 
 @CapacitorPlugin(name = "PodcastDownloads")
 public class PodcastDownloadsPlugin extends Plugin {
@@ -21,14 +23,19 @@ public class PodcastDownloadsPlugin extends Plugin {
 
     @PluginMethod
     public void download(PluginCall call) {
-        downloads.execute(() -> {
-            try {
-                storage.download(call.getObject("episode"));
-                call.resolve();
-            } catch (Exception ignored) {
-                call.reject("Could not download this episode.");
-            }
-        });
+        EpisodeDownloads.DownloadAttempt attempt;
+        try {
+            attempt = storage.beginDownload(call.getObject("episode", new JSObject()));
+        } catch (JSONException ignored) {
+            call.reject("Could not download this episode.");
+            return;
+        }
+        try {
+            downloads.execute(new DownloadTask(attempt, call));
+        } catch (RejectedExecutionException ignored) {
+            storage.endDownload(attempt);
+            call.reject("Could not download this episode.");
+        }
     }
 
     @PluginMethod
@@ -47,7 +54,36 @@ public class PodcastDownloadsPlugin extends Plugin {
     }
 
     @Override
+    protected void handleOnResume() {
+        notifyListeners("resume", new JSObject());
+    }
+
+    @Override
     protected void handleOnDestroy() {
-        downloads.shutdownNow();
+        for (Runnable waiting : downloads.shutdownNow()) {
+            storage.endDownload(((DownloadTask) waiting).attempt);
+        }
+    }
+
+    private final class DownloadTask implements Runnable {
+        final EpisodeDownloads.DownloadAttempt attempt;
+        final PluginCall call;
+
+        DownloadTask(EpisodeDownloads.DownloadAttempt attempt, PluginCall call) {
+            this.attempt = attempt;
+            this.call = call;
+        }
+
+        @Override
+        public void run() {
+            try {
+                storage.download(attempt);
+                call.resolve();
+            } catch (Exception ignored) {
+                call.reject("Could not download this episode.");
+            } finally {
+                storage.endDownload(attempt);
+            }
+        }
     }
 }

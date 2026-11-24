@@ -10,7 +10,7 @@ const maps = [
 ] as const;
 const fields = [
   'queue', 'newReleases', 'lastRefresh', 'lastPlayingEpisode',
-  'cellularDownload', 'autoDownloadQueued', 'skipBackwardSeconds', 'skipForwardSeconds',
+  'cellularDownload', 'autoDownloadQueued', 'autoRemoveFinishedDownloads', 'skipBackwardSeconds', 'skipForwardSeconds',
   'subscriptionSortField', 'subscriptionSortDirection',
 ] as const;
 type MapField = typeof maps[number];

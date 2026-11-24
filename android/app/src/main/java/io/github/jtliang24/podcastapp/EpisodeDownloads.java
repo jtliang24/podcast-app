@@ -11,12 +11,16 @@ import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 final class EpisodeDownloads {
     private static final Object FILES = new Object();
+    private static final Set<DownloadAttempt> ACTIVE = new HashSet<>();
 
     private final File root;
 
@@ -43,9 +47,26 @@ final class EpisodeDownloads {
         }
     }
 
-    void download(JSONObject episode) throws Exception {
-        String id = episode.getString("id");
-        if (audio(id) != null) return;
+    DownloadAttempt beginDownload(JSONObject episode) throws JSONException {
+        DownloadAttempt attempt = new DownloadAttempt(episode, episode.getString("id"));
+        synchronized (FILES) {
+            ACTIVE.add(attempt);
+        }
+        return attempt;
+    }
+
+    void endDownload(DownloadAttempt attempt) {
+        synchronized (FILES) {
+            ACTIVE.remove(attempt);
+        }
+    }
+
+    void download(DownloadAttempt attempt) throws Exception {
+        String id = attempt.id;
+        JSONObject episode = attempt.episode;
+        synchronized (FILES) {
+            if (attempt.discard || audio(id) != null) return;
+        }
         if (!root.isDirectory() && !root.mkdirs() && !root.isDirectory()) throw new IOException("Storage unavailable");
         File temporary = File.createTempFile("audio-", ".part", root);
         HttpURLConnection connection = null;
@@ -74,6 +95,7 @@ final class EpisodeDownloads {
                 throw new IOException("Incomplete download");
             }
             synchronized (FILES) {
+                if (attempt.discard || audio(id) != null) return;
                 File directory = directory(id);
                 if (!directory.isDirectory() && !directory.mkdir()) throw new IOException("Storage unavailable");
                 PrivateFiles.write(new AtomicFile(new File(directory, "episode.json")), episode.toString());
@@ -82,6 +104,15 @@ final class EpisodeDownloads {
         } finally {
             if (connection != null) connection.disconnect();
             temporary.delete();
+        }
+    }
+
+    void finishDownload(String id) throws IOException {
+        synchronized (FILES) {
+            for (DownloadAttempt attempt : ACTIVE) {
+                if (attempt.id.equals(id)) attempt.discard = true;
+            }
+            remove(id);
         }
     }
 
@@ -109,6 +140,17 @@ final class EpisodeDownloads {
             if (audio.exists() && !audio.delete()) throw new IOException("Could not delete audio");
             new AtomicFile(new File(directory, "episode.json")).delete();
             directory.delete();
+        }
+    }
+
+    static final class DownloadAttempt {
+        final JSONObject episode;
+        final String id;
+        boolean discard;
+
+        DownloadAttempt(JSONObject episode, String id) {
+            this.episode = episode;
+            this.id = id;
         }
     }
 }

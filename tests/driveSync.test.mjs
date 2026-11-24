@@ -43,9 +43,9 @@ test('an initial offline edit overlays the legacy snapshot once', () => {
 });
 
 test('legacy and unsupported library preferences use the same defaults', () => {
-  const defaults = { cellularDownload: 'ask', autoDownloadQueued: true, skipBackwardSeconds: 15, skipForwardSeconds: 30 };
+  const defaults = { cellularDownload: 'ask', autoDownloadQueued: true, autoRemoveFinishedDownloads: false, skipBackwardSeconds: 15, skipForwardSeconds: 30 };
   assert.deepEqual(getPreferences(newProfile().state), defaults);
-  const imported = newProfile(JSON.parse('{"cellularDownload":"wifi","autoDownloadQueued":"off","skipBackwardSeconds":20,"skipForwardSeconds":"60"}'));
+  const imported = newProfile(JSON.parse('{"cellularDownload":"wifi","autoDownloadQueued":"off","autoRemoveFinishedDownloads":"true","skipBackwardSeconds":20,"skipForwardSeconds":"60"}'));
   assert.deepEqual(getPreferences(imported.state), defaults);
 });
 
@@ -53,11 +53,11 @@ test('different preferences merge independently and survive a JSON round trip', 
   const phone = newProfile();
   const desktop = newProfile();
   recordEdit(phone, state => ({ ...state, cellularDownload: 'no', skipForwardSeconds: 60 }), 'phone', false, 30);
-  recordEdit(desktop, state => ({ ...state, autoDownloadQueued: false, skipBackwardSeconds: 10 }), 'desktop', false, 10);
+  recordEdit(desktop, state => ({ ...state, autoDownloadQueued: false, autoRemoveFinishedDownloads: true, skipBackwardSeconds: 10 }), 'desktop', false, 10);
   const exchange = (from, to) => applyBatch(to, JSON.parse(JSON.stringify(from.pending[0].batch)));
   exchange(phone, desktop);
   exchange(desktop, phone);
-  const expected = { cellularDownload: 'no', autoDownloadQueued: false, skipBackwardSeconds: 10, skipForwardSeconds: 60 };
+  const expected = { cellularDownload: 'no', autoDownloadQueued: false, autoRemoveFinishedDownloads: true, skipBackwardSeconds: 10, skipForwardSeconds: 60 };
   assert.deepEqual(getPreferences(phone.state), expected);
   assert.deepEqual(getPreferences(desktop.state), expected);
   const reopened = newProfile(JSON.parse(JSON.stringify(phone.state)));

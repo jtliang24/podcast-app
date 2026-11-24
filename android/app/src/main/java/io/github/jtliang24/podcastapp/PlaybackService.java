@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.util.Log;
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
 import androidx.media3.common.AudioAttributes;
@@ -30,6 +31,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -76,6 +78,7 @@ public class PlaybackService extends MediaSessionService {
     private boolean replacing;
     private boolean invalidSource;
     private boolean skipButtonsVisible;
+    private boolean autoRemoveFinishedDownloads;
 
     @Override
     public void onCreate() {
@@ -218,7 +221,7 @@ public class PlaybackService extends MediaSessionService {
     JSObject control(String requestedProfile, String action, JSONObject options) throws JSONException {
         if ("open".equals(action)) {
             if (!requestedProfile.equals(profile)) open(requestedProfile, options);
-            sessionPlayer.setSeekIncrements(options);
+            setPreferences(options);
         } else {
             if (!requestedProfile.equals(profile)) throw new IllegalStateException("The playback library has changed");
             switch (action) {
@@ -241,8 +244,8 @@ public class PlaybackService extends MediaSessionService {
                 case "seek":
                     seek(milliseconds(options.getDouble("time")));
                     break;
-                case "seekIncrements":
-                    sessionPlayer.setSeekIncrements(options);
+                case "preferences":
+                    setPreferences(options);
                     break;
                 case "acknowledge":
                     long acknowledged = options.getLong("revision");
@@ -256,6 +259,11 @@ public class PlaybackService extends MediaSessionService {
             }
         }
         return snapshot();
+    }
+
+    private void setPreferences(JSONObject options) {
+        sessionPlayer.setSeekIncrements(options);
+        autoRemoveFinishedDownloads = options.optBoolean("autoRemoveFinishedDownloads");
     }
 
     private final class SessionPlayer extends ForwardingSimpleBasePlayer {
@@ -417,6 +425,13 @@ public class PlaybackService extends MediaSessionService {
         pending.remove(changeKey(finished.episode, false));
         Track next = queue.isEmpty() ? null : queue.get(0);
         select(next, next != null);
+        if (autoRemoveFinishedDownloads) {
+            try {
+                downloads.finishDownload(finished.id());
+            } catch (IOException exception) {
+                Log.w("PodcastPlayback", "Could not remove a finished download", exception);
+            }
+        }
         record(finished, duration, duration, true, true);
         recordSelection();
     }
@@ -443,6 +458,7 @@ public class PlaybackService extends MediaSessionService {
         JSONObject change = new JSObject().put("episode", track.episode)
             .put("time", time / 1000.0).put("duration", duration / 1000.0)
             .put("updated", updated).put("finished", finished)
+            .put("downloadCleanup", finished && autoRemoveFinishedDownloads)
             .put("selected", selected || (previous != null && previous.optBoolean("selected")))
             .put("lastPlayed", finished ? updated : lastPlayed)
             .put("urgent", urgentChange).put("revision", ++revision);

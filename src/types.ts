@@ -59,6 +59,7 @@ export interface AppState {
   lastPlayingEpisode?: Episode | null;
   cellularDownload?: CellularDownload;
   autoDownloadQueued?: boolean;
+  autoRemoveFinishedDownloads?: boolean;
   skipBackwardSeconds?: SkipInterval;
   skipForwardSeconds?: SkipInterval;
 }
