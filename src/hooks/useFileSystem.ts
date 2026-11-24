@@ -366,6 +366,7 @@ export function useFileSystem(network: SyncNetwork) {
   }, [publish]);
 
   const exportState = useCallback(async () => {
+    setStorageError(null);
     const json = JSON.stringify(state, null, 2);
     if (isAndroid) {
       try {
@@ -385,6 +386,7 @@ export function useFileSystem(network: SyncNetwork) {
   }, [state]);
 
   const importState = useCallback(async (file: File) => {
+    setStorageError(null);
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as StateSnapshot | null;

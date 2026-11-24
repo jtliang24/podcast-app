@@ -109,8 +109,9 @@ repository root to install it on a connected device.
 
 ### Move a library to Android
 
-- **JSON**. In the browser's Library, choose **Export**. Copy the file to the
-  phone. In the Android app's Library, choose **Import** to load a copy into
+- **JSON**. In the browser, open **Settings → Data Portability** and choose
+  **Export JSON**. Copy the file to the phone. In the Android app, open
+  **Settings → Data Portability** and choose **Import JSON** to load a copy into
   app-private storage or **Open and link JSON file** to keep writing to that
   document. **Create linked JSON file** writes the current library to a new
   document. If access is revoked, **Reconnect JSON file** writes the retained

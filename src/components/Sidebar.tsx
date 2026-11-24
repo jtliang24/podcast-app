@@ -1,8 +1,5 @@
 import React, { useMemo } from 'react';
-import { 
-  Upload, Download, HardDrive, Clock, Trash2, 
-  FileJson, Save 
-} from 'lucide-react';
+import { Upload, Download, HardDrive, Clock, Trash2 } from 'lucide-react';
 import type { AppState, Podcast, SubscriptionSortDirection, SubscriptionSortField } from '../types';
 import { sortSubscriptions } from '../services/subscriptionSort';
 
@@ -16,14 +13,6 @@ interface SidebarProps {
   handleUnsubscribe: (feedUrl: string) => void;
   handleImportOPML: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleExportOPML: () => void;
-  handleImportState: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  exportState: () => void;
-  androidFileActions?: {
-    linkedFile: boolean;
-    reconnectFile: boolean;
-    choosingFile: boolean;
-    linkAndroidFile: (action: 'open' | 'create' | 'reconnect') => Promise<void>;
-  };
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -36,9 +25,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   handleUnsubscribe,
   handleImportOPML,
   handleExportOPML,
-  handleImportState,
-  exportState,
-  androidFileActions,
 }) => {
   const {
     subscriptions, subscriptionSortField = 'release-date', subscriptionSortDirection = 'descending',
@@ -123,34 +109,6 @@ const Sidebar: React.FC<SidebarProps> = ({
         ))}
       </div>
 
-      {/* Data Portability Section */}
-      <div className="p-4 border-t border-slate-800 bg-slate-950/30">
-        <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 px-2">Data Portability</div>
-        <div className="grid grid-cols-2 gap-2">
-          <label className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-800 hover:bg-slate-700 cursor-pointer transition-colors text-slate-300">
-            <FileJson size={16} className="mb-1" />
-            <span className="text-[10px] font-bold">Import</span>
-            <input type="file" className="hidden" accept=".json" onChange={handleImportState} />
-          </label>
-          <button onClick={exportState} className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-800 hover:bg-slate-700 transition-colors text-slate-300">
-            <Save size={16} className="mb-1" />
-            <span className="text-[10px] font-bold">Export</span>
-          </button>
-        </div>
-        {androidFileActions && (
-          <div className="mt-2 space-y-2 text-xs text-slate-300">
-            {androidFileActions.reconnectFile ? (
-              <p>File access was lost. Reconnect to write this library to the selected JSON file.</p>
-            ) : androidFileActions.linkedFile && <p role="status">JSON file linked</p>}
-            <div className="flex flex-wrap gap-2">
-              <button className="rounded-lg bg-slate-800 p-2" disabled={androidFileActions.choosingFile}
-                onClick={() => void androidFileActions.linkAndroidFile('open')}>Open and link JSON file</button>
-              <button className="rounded-lg bg-slate-800 p-2" disabled={androidFileActions.choosingFile}
-                onClick={() => void androidFileActions.linkAndroidFile('create')}>Create linked JSON file</button>
-            </div>
-          </div>
-        )}
-      </div>
     </aside>
   );
 };

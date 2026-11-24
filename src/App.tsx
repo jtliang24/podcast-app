@@ -704,15 +704,19 @@ function Library({ storage, profile, downloads, connection }: {
           handleUnsubscribe={handleUnsubscribe}
           handleImportOPML={handleImportOPML}
           handleExportOPML={handleExportOPML}
-          handleImportState={handleImportState}
-          exportState={exportState}
-          androidFileActions={storageMode === 'android' ? { linkedFile, reconnectFile, choosingFile, linkAndroidFile } : undefined}
         />
       </div>
       <main className={`min-w-0 flex-1 flex-col pb-44 md:pb-32 overflow-hidden ${queueOpen ? 'hidden' : 'flex'}`}>
         <div className="flex flex-wrap items-center justify-end gap-3 px-6 pt-3 text-sm">
           <button className="mr-auto text-blue-300 md:hidden" aria-expanded={showLibrary} onClick={() => setShowLibrary(!showLibrary)}>Library</button>
-          <SettingsButton preferences={preferences} onChange={change => void updateState(previous => ({ ...previous, ...change }))} />
+          <SettingsButton
+            preferences={preferences}
+            onChange={change => void updateState(previous => ({ ...previous, ...change }))}
+            onImport={handleImportState}
+            onExport={exportState}
+            storageError={storageError}
+            androidFileActions={storageMode === 'android' ? { linkedFile, reconnectFile, choosingFile, linkAndroidFile } : undefined}
+          />
           <ReportBugButton />
           {storageMode !== 'google-drive' ? (
             <button className="text-blue-300" disabled={!!driveLoadingMessage} onClick={() => loginWithGoogle()}>{driveLoadingMessage || 'Connect Google Drive'}</button>
@@ -725,11 +729,6 @@ function Library({ storage, profile, downloads, connection }: {
             </>
           )}
           {storageError && <span role="alert" className="text-red-300">{storageError}</span>}
-          {storageMode === 'android' && reconnectFile && (
-            <button className="text-amber-300" disabled={choosingFile} onClick={() => void linkAndroidFile('reconnect')}>
-              Reconnect JSON file
-            </button>
-          )}
         </div>
         {downloadError && (
           <div className="fixed inset-x-4 bottom-44 z-[60] mx-auto flex max-w-md items-center gap-3 rounded-xl border border-red-400/40 bg-slate-900 px-4 py-2 text-sm text-red-300 shadow-xl md:bottom-32">
