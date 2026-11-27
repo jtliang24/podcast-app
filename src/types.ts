@@ -8,6 +8,22 @@ export interface Podcast {
   addedAt?: number;
 }
 
+/** An inline (Podlove Simple Chapters) chapter. `start` is in seconds. */
+export interface InlineChapter {
+  start: number;
+  title: string;
+  url?: string;
+  img?: string;
+}
+
+/** A Podcasting 2.0 `podcast:transcript` entry. `type` is the MIME type, e.g. `text/vtt`. */
+export interface TranscriptRef {
+  url: string;
+  type: string;
+  language?: string;
+  rel?: string;
+}
+
 export interface Episode {
   id: string;
   podcastId: string;
@@ -17,6 +33,12 @@ export interface Episode {
   duration: number;
   description: string;
   keywords?: string[];
+  /** `podcast:chapters` JSON URL (HTTPS only). */
+  chaptersUrl?: string;
+  /** `psc:chapters`, capped at 100 entries. */
+  inlineChapters?: InlineChapter[];
+  /** Always set by the feed parser (possibly `[]`); `undefined` means the episode was saved by an older version. */
+  transcripts?: TranscriptRef[];
 }
 
 export interface EpisodeQueue {

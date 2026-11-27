@@ -1,10 +1,12 @@
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
-import type { Podcast, Episode } from '../types';
+import type { Podcast, Episode, InlineChapter, TranscriptRef } from '../types';
 import { isPrivateSubstackFeed, isSubstackHost, substackFeedEndpoint, substackFeedHeader } from './substackFeed.ts';
 import { AndroidHttp, isAndroid } from './android.ts';
 
 const FEED_REQUEST_TIMEOUT_MS = 10_000;
 const FEED_ACCEPT = 'application/rss+xml, application/xml, text/xml, application/json';
+
+const MAX_INLINE_CHAPTERS = 100;
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -194,6 +196,9 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
         description: readXmlText(item.description) || readXmlText(item['content:encoded']),
         keywords: keywordNodes.flatMap(node => readXmlText(node).split(','))
           .map(keyword => keyword.trim()).filter(Boolean),
+        chaptersUrl: parseChaptersUrl(item['podcast:chapters']),
+        inlineChapters: parseInlineChapters(item['psc:chapters']),
+        transcripts: parseTranscripts(item['podcast:transcript']),
       });
     }
 
@@ -208,6 +213,73 @@ function isXmlRecord(value: unknown): value is Record<string, unknown> {
 function readXmlText(value: unknown): string {
   const text = isXmlRecord(value) ? value['#text'] : value;
   return typeof text === 'string' ? text : '';
+}
+
+function toArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : value === undefined ? [] : [value];
+}
+
+/** Returns the normalized URL when it is a valid HTTPS URL, otherwise undefined. */
+function httpsUrl(value: unknown): string | undefined {
+  const text = readXmlText(value).trim();
+  if (!text) return undefined;
+  try {
+    const url = new URL(text);
+    return url.protocol === 'https:' ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function xmlAttribute(node: unknown, name: string): string {
+  return isXmlRecord(node) ? readXmlText(node[`@_${name}`]).trim() : '';
+}
+
+function parseChaptersUrl(value: unknown): string | undefined {
+  for (const node of toArray(value)) {
+    const url = isXmlRecord(node) ? httpsUrl(node['@_url']) : undefined;
+    if (url) return url;
+  }
+  return undefined;
+}
+
+function parseTranscripts(value: unknown): TranscriptRef[] {
+  const transcripts: TranscriptRef[] = [];
+  for (const node of toArray(value)) {
+    const url = isXmlRecord(node) ? httpsUrl(node['@_url']) : undefined;
+    if (!url) continue;
+    const language = xmlAttribute(node, 'language');
+    const rel = xmlAttribute(node, 'rel');
+    transcripts.push({
+      url,
+      type: xmlAttribute(node, 'type'),
+      ...(language && { language }),
+      ...(rel && { rel }),
+    });
+  }
+  return transcripts;
+}
+
+/** Parses `HH:MM:SS.mmm`, `MM:SS`, `SS` or fractional seconds. Returns NaN when it is not a time. */
+function parseChapterStart(value: string): number {
+  const parts = value.trim().split(':');
+  if (parts.length > 3 || parts.some(part => !/^\d+([.,]\d+)?$/.test(part))) return NaN;
+  return parts.reduce((total, part) => total * 60 + Number(part.replace(',', '.')), 0);
+}
+
+function parseInlineChapters(value: unknown): InlineChapter[] | undefined {
+  const chapters: InlineChapter[] = [];
+  for (const container of toArray(value)) {
+    if (!isXmlRecord(container)) continue;
+    for (const node of toArray(container['psc:chapter'])) {
+      const start = parseChapterStart(xmlAttribute(node, 'start'));
+      if (!Number.isFinite(start) || !isXmlRecord(node)) continue;
+      const url = httpsUrl(node['@_href']);
+      const img = httpsUrl(node['@_image']);
+      chapters.push({ start, title: xmlAttribute(node, 'title'), ...(url && { url }), ...(img && { img }) });
+    }
+  }
+  return chapters.length ? chapters.sort((a, b) => a.start - b.start).slice(0, MAX_INLINE_CHAPTERS) : undefined;
 }
 
 function parseDuration(duration: string): number {
