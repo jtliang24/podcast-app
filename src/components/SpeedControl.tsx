@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { MAX_SPEED, MIN_SPEED, SPEED_PRESETS } from '../types';
-import { formatSpeed } from '../services/preferences';
+import { formatSpeed, roundSpeed } from '../services/preferences';
 
 interface SpeedControlProps {
   /** Effective speed of the current episode. */
@@ -134,7 +134,8 @@ export default function SpeedControl({ speed, hasOverride, canOverride, disabled
               value={shown}
               aria-valuetext={formatSpeed(shown)}
               onChange={event => {
-                const value = event.currentTarget.valueAsNumber;
+                // Rounded like the saved speed (the slider can give 1.1500000000000001), so the two compare equal.
+                const value = roundSpeed(event.currentTarget.valueAsNumber);
                 setDraft(value);
                 pending.current = value;
                 window.clearTimeout(commitTimer.current);

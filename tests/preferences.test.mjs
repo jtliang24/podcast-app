@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getPreferences, speedFor } from '../src/services/preferences.ts';
+import { getPreferences, roundSpeed, speedFor } from '../src/services/preferences.ts';
 import { INITIAL_STATE, MAX_SPEED, MIN_SPEED, SPEED_PRESETS } from '../src/types.ts';
 
 const withSpeed = (playbackSpeed, podcastPlaybackSpeeds) => ({ ...INITIAL_STATE, playbackSpeed, podcastPlaybackSpeeds });
@@ -20,6 +20,13 @@ test('speed is rounded to 0.05 and presets are unchanged', () => {
   assert.equal(getPreferences(withSpeed(1.234)).playbackSpeed, 1.25);
   assert.equal(getPreferences(withSpeed(1.52)).playbackSpeed, 1.5);
   for (const preset of SPEED_PRESETS) assert.equal(getPreferences(withSpeed(preset)).playbackSpeed, preset);
+});
+
+test('roundSpeed matches the stored speed for slider values', () => {
+  assert.equal(roundSpeed(1.1500000000000001), 1.15);
+  assert.equal(roundSpeed(1.15), getPreferences(withSpeed(1.1500000000000001)).playbackSpeed);
+  assert.equal(roundSpeed(0.1), MIN_SPEED);
+  assert.equal(roundSpeed(10), MAX_SPEED);
 });
 
 test('speedFor prefers a podcast override over the global speed', () => {

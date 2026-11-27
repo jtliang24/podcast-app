@@ -9,9 +9,14 @@ function skipInterval(value: SkipInterval | undefined, fallback: SkipInterval) {
   return value !== undefined && SKIP_INTERVALS.includes(value) ? value : fallback;
 }
 
+/** A finite speed as stored and played: rounded to 0.05 and clamped to the allowed range. */
+export function roundSpeed(value: number) {
+  return Math.min(MAX_SPEED, Math.max(MIN_SPEED, Math.round(value * 20) / 20));
+}
+
 function speed(value: unknown, fallback: number) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-  return Math.min(MAX_SPEED, Math.max(MIN_SPEED, Math.round(value * 20) / 20));
+  return roundSpeed(value);
 }
 
 /** Playback speed for a podcast (its feedUrl): the override if one exists, else the global speed. */
