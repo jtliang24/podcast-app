@@ -6,6 +6,9 @@ import { useSleepTimerLabel } from '../hooks/useSleepTimer';
 
 interface SleepTimerControlProps extends SleepTimerControls {
   disabled?: boolean;
+  /** Where the current chapter ends, in seconds, when it is known. Offers **End of chapter** with `episodeId`. */
+  chapterEnd?: number;
+  episodeId?: string;
   className?: string;
   /** Where the sheet opens, relative to the button. */
   placement?: 'above' | 'below';
@@ -13,7 +16,7 @@ interface SleepTimerControlProps extends SleepTimerControls {
 
 /** A moon button showing the time left that opens a small sheet to set, extend, or cancel the sleep timer. */
 export default function SleepTimerControl({
-  sleepTimer, setSleepTimer, extendSleepTimer, cancelSleepTimer, disabled, className = '', placement = 'above',
+  sleepTimer, setSleepTimer, extendSleepTimer, cancelSleepTimer, disabled, chapterEnd, episodeId, className = '', placement = 'above',
 }: SleepTimerControlProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -35,6 +38,9 @@ export default function SleepTimerControl({
     button.current?.focus();
     setOpen(false);
   };
+  const options: readonly SleepTimerOption[] = chapterEnd !== undefined && Number.isFinite(chapterEnd) && episodeId
+    ? [...SLEEP_TIMER_OPTIONS, { kind: 'position', until: chapterEnd, episodeId }]
+    : SLEEP_TIMER_OPTIONS;
   const choose = (option: SleepTimerOption) => {
     setSleepTimer(option);
     close();
@@ -105,8 +111,8 @@ export default function SleepTimerControl({
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            {SLEEP_TIMER_OPTIONS.map(option => {
-              const active = option.kind === 'episode' && sleepTimer?.kind === 'episode';
+            {options.map(option => {
+              const active = option.kind !== 'time' && sleepTimer?.kind === option.kind;
               return (
                 <button
                   key={sleepTimerOptionLabel(option)}

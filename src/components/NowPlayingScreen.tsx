@@ -215,7 +215,11 @@ export default function NowPlayingScreen({
               onOverride={onSpeedOverride}
               className="px-4 py-2 text-sm"
             />
-            <SleepTimerControl {...sleep} className="px-4 py-2 text-sm" />
+            <SleepTimerControl
+              {...sleep}
+              chapterEnd={Number.isFinite(current?.end) ? current?.end : undefined}
+              episodeId={episode.id}
+              className="px-4 py-2 text-sm" />
           </div>
 
           <NowPlayingTabs tabs={tabs} />

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  SLEEP_TIMER_OPTIONS, canExtend, extend, formatSleepRemaining, remaining, shouldStop, sleepTimerLabel, startSleepTimer,
+  SLEEP_TIMER_OPTIONS, canExtend, extend, formatSleepRemaining, remaining, shouldStop, sleepTimerLabel, sleepTimerOptionLabel, startSleepTimer,
 } from '../src/services/sleepTimer.ts';
 
 const MINUTE = 60_000;
@@ -12,6 +12,8 @@ test('options are the listed durations plus end of episode', () => {
     [5, 10, 15, 30, 45, 60, 90, 'episode']);
   assert.deepEqual(startSleepTimer({ kind: 'time', minutes: 15 }, now), { kind: 'time', endsAt: now + 15 * MINUTE });
   assert.deepEqual(startSleepTimer({ kind: 'episode' }, now), { kind: 'episode' });
+  assert.deepEqual(startSleepTimer({ kind: 'position', until: 600, episodeId: 'a' }, now), { kind: 'position', until: 600, episodeId: 'a' });
+  assert.equal(sleepTimerOptionLabel({ kind: 'position', until: 600, episodeId: 'a' }), 'End of chapter');
 });
 
 test('remaining counts wall-clock time for time timers and never goes below 0', () => {

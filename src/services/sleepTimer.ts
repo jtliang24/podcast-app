@@ -9,8 +9,11 @@ export type SleepTimer =
   | { kind: 'episode' }
   | { kind: 'position'; until: number; episodeId: string };
 
-/** A choice offered in the sleep timer sheet. */
-export type SleepTimerOption = { kind: 'time'; minutes: number } | { kind: 'episode' };
+/** A choice offered in the sleep timer sheet. `position` is the end of the current chapter. */
+export type SleepTimerOption =
+  | { kind: 'time'; minutes: number }
+  | { kind: 'episode' }
+  | { kind: 'position'; until: number; episodeId: string };
 
 /** Where playback is when a timer is checked. `position` is media time in seconds. */
 export interface SleepTimerCheck {
@@ -39,7 +42,11 @@ export const SLEEP_TIMER_EXTENSION_MS = 5 * 60_000;
 export const SLEEP_TIMER_FADE_MS = 10_000;
 
 export function startSleepTimer(option: SleepTimerOption, now: number): SleepTimer {
-  return option.kind === 'time' ? { kind: 'time', endsAt: now + option.minutes * 60_000 } : { kind: 'episode' };
+  switch (option.kind) {
+    case 'time': return { kind: 'time', endsAt: now + option.minutes * 60_000 };
+    case 'episode': return { kind: 'episode' };
+    case 'position': return { kind: 'position', until: option.until, episodeId: option.episodeId };
+  }
 }
 
 /**
@@ -105,5 +112,9 @@ export function sleepTimerLabel(timer: SleepTimer, now: number) {
 }
 
 export function sleepTimerOptionLabel(option: SleepTimerOption) {
-  return option.kind === 'time' ? `${option.minutes} min` : 'End of episode';
+  switch (option.kind) {
+    case 'time': return `${option.minutes} min`;
+    case 'episode': return 'End of episode';
+    case 'position': return 'End of chapter';
+  }
 }

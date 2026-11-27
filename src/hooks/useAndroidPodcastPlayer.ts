@@ -143,9 +143,11 @@ export function useAndroidPodcastPlayer({
     void request({ action: 'select', track: androidPlaybackTrack(state, offer.episode, offer.time), autoplay: true });
   };
   const setSleepTimer = useCallback((option: SleepTimerOption) => {
-    void request(option.kind === 'time'
-      ? { action: 'sleep', mode: 'time', minutes: option.minutes }
-      : { action: 'sleep', mode: 'episode' });
+    void request(
+      option.kind === 'time' ? { action: 'sleep', mode: 'time', minutes: option.minutes }
+        : option.kind === 'position' ? { action: 'sleep', mode: 'position', until: option.until, episodeId: option.episodeId }
+          : { action: 'sleep', mode: 'episode' },
+    );
   }, [request]);
   const extendSleepTimer = useCallback(() => {
     void request({ action: 'sleep', mode: 'extend', extendMs: SLEEP_TIMER_EXTENSION_MS });
