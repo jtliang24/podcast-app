@@ -2,6 +2,8 @@ import { useRef, useState } from 'react';
 import type { CSSProperties, Ref } from 'react';
 import { ChevronDown, Pause, Play, Podcast as PodcastIcon, RotateCcw, RotateCw } from 'lucide-react';
 import type { Episode, Podcast, SkipInterval } from '../types';
+import SpeedControl from './SpeedControl';
+import { formatSpeed } from '../services/preferences';
 
 interface PlaybackTimelineProps {
   currentTime: number;
@@ -21,6 +23,10 @@ interface NowPlayingScreenProps extends PlaybackTimelineProps {
   skipForwardSeconds: SkipInterval;
   playbackError: boolean;
   retry: () => void;
+  speed: number;
+  hasSpeedOverride: boolean;
+  onSpeed: (speed: number) => void;
+  onSpeedOverride: (enabled: boolean) => void;
 }
 
 function PlaybackTimeline({ currentTime, duration, seek, formatTime }: PlaybackTimelineProps) {
@@ -79,7 +85,7 @@ function PlaybackTimeline({ currentTime, duration, seek, formatTime }: PlaybackT
 }
 
 export default function NowPlayingScreen({
-  ref, episode, podcast, isPlaying, togglePlay, skip, skipBackwardSeconds, skipForwardSeconds, playbackError, retry, ...timeline
+  ref, episode, podcast, isPlaying, togglePlay, skip, skipBackwardSeconds, skipForwardSeconds, playbackError, retry, speed, hasSpeedOverride, onSpeed, onSpeedOverride, ...timeline
 }: NowPlayingScreenProps) {
   return (
     <dialog
@@ -121,6 +127,12 @@ export default function NowPlayingScreen({
           )}
 
           <PlaybackTimeline key={episode.audioUrl} {...timeline} />
+          {speed !== 1 && Number.isFinite(timeline.duration) && timeline.duration > timeline.currentTime && (
+            <p className="-mt-3 text-sm tabular-nums text-slate-400">
+              <span className="sr-only">Remaining at {formatSpeed(speed)} </span>
+              -{timeline.formatTime((timeline.duration - timeline.currentTime) / speed)} at {formatSpeed(speed)}
+            </p>
+          )}
 
           <div className="flex items-center gap-7 md:gap-10">
             <button type="button" aria-label={`Back ${skipBackwardSeconds} seconds`} onClick={() => skip(-skipBackwardSeconds)} className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-full text-slate-300 hover:bg-slate-800 hover:text-white">
@@ -135,6 +147,15 @@ export default function NowPlayingScreen({
               <span className="text-xs font-semibold">{skipForwardSeconds}s</span>
             </button>
           </div>
+
+          <SpeedControl
+            speed={speed}
+            hasOverride={hasSpeedOverride}
+            canOverride={!!episode.podcastId}
+            onSpeed={onSpeed}
+            onOverride={onSpeedOverride}
+            className="px-4 py-2 text-sm"
+          />
         </div>
       ) : (
         <p className="px-5 py-12 text-center text-slate-400">No episode selected</p>

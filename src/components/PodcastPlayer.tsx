@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import type { Episode, Podcast, SkipInterval } from '../types';
 import NowPlayingScreen from './NowPlayingScreen';
+import SpeedControl from './SpeedControl';
 
 interface PodcastPlayerProps {
   queueButton: React.Ref<HTMLButtonElement>;
@@ -20,6 +21,10 @@ interface PodcastPlayerProps {
   skipBackwardSeconds: SkipInterval;
   skipForwardSeconds: SkipInterval;
   seek: (time: number) => void;
+  speed: number;
+  hasSpeedOverride: boolean;
+  onSpeed: (speed: number) => void;
+  onSpeedOverride: (enabled: boolean) => void;
   formatTime: (time: number) => string;
   playbackError: boolean;
   retry: () => void;
@@ -40,6 +45,10 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
   skipBackwardSeconds,
   skipForwardSeconds,
   seek,
+  speed,
+  hasSpeedOverride,
+  onSpeed,
+  onSpeedOverride,
   formatTime,
   playbackError,
   retry,
@@ -122,6 +131,14 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
               <List size={14} />
               <span>Queue ({queueCount})</span>
             </button>
+            <SpeedControl
+              speed={speed}
+              hasOverride={hasSpeedOverride}
+              canOverride={!!currentEpisode}
+              disabled={!currentEpisode}
+              onSpeed={onSpeed}
+              onOverride={onSpeedOverride}
+            />
             <span className="bg-slate-800 px-2 py-1 rounded">{formatTime(currentTime)} / {formatTime(duration)}</span>
           </div>
         </div>
@@ -146,6 +163,10 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
         skipBackwardSeconds={skipBackwardSeconds}
         skipForwardSeconds={skipForwardSeconds}
         seek={seek}
+        speed={speed}
+        hasSpeedOverride={hasSpeedOverride}
+        onSpeed={onSpeed}
+        onSpeedOverride={onSpeedOverride}
         formatTime={formatTime}
         playbackError={playbackError}
         retry={retry}

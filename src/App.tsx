@@ -10,7 +10,7 @@ import { useAndroidPodcastPlayer } from './hooks/useAndroidPodcastPlayer';
 import { useDownloadPolicy, useDownloadStorage } from './hooks/useDownloads';
 import { AndroidFiles, isAndroid } from './services/android';
 import { fetchPodcastFeed, PrivateFeedError, searchPodcasts, parseOPML, generateOPML } from './services/podcastService';
-import { getPreferences } from './services/preferences';
+import { getPreferences, speedFor } from './services/preferences';
 import { latestEpisodeRelease, releaseDatesByPodcast } from './services/subscriptionSort';
 import { moveQueuedEpisode, normalizeState, orderedQueue, queueEpisode, removeQueuedEpisode } from './services/playbackQueue';
 import type { Podcast, Episode, SortOrder, QueueEpisode, QueueTier } from './types';
@@ -230,6 +230,20 @@ function Library({ storage, profile, downloads, connection }: {
     state, profile, ready, skipBackwardSeconds, skipForwardSeconds,
     updateState, downloadedEpisodes, downloadsReady, remoteSession,
     autoRemoveFinishedDownloads, finishDownload: downloads.finishDownload, refreshDownloads: downloads.refreshDownloads,
+  });
+  const speedPodcastId = currentEpisode?.podcastId;
+  const speed = speedFor(state, speedPodcastId);
+  const hasSpeedOverride = speedPodcastId !== undefined && Object.hasOwn(state.podcastPlaybackSpeeds ?? {}, speedPodcastId);
+  const setSpeed = (value: number) => void updateState(previous => {
+    if (speedPodcastId === undefined || !Object.hasOwn(previous.podcastPlaybackSpeeds ?? {}, speedPodcastId)) return { ...previous, playbackSpeed: value };
+    return { ...previous, podcastPlaybackSpeeds: { ...previous.podcastPlaybackSpeeds, [speedPodcastId]: value } };
+  });
+  const setSpeedOverride = (enabled: boolean) => void updateState(previous => {
+    if (speedPodcastId === undefined) return previous;
+    const speeds = { ...previous.podcastPlaybackSpeeds };
+    if (enabled) speeds[speedPodcastId] = speedFor(previous, speedPodcastId);
+    else delete speeds[speedPodcastId];
+    return { ...previous, podcastPlaybackSpeeds: speeds };
   });
   const currentId = currentEpisode?.id ?? state.lastPlayingEpisode?.id;
   const waiting = useMemo(() => currentId ? removeQueuedEpisode(state.queue, currentId) : state.queue,
@@ -901,6 +915,10 @@ function Library({ storage, profile, downloads, connection }: {
         skipBackwardSeconds={skipBackwardSeconds}
         skipForwardSeconds={skipForwardSeconds}
         seek={seek}
+        speed={speed}
+        hasSpeedOverride={hasSpeedOverride}
+        onSpeed={setSpeed}
+        onSpeedOverride={setSpeedOverride}
         formatTime={formatTime}
         playbackError={playbackError}
         retry={retry}

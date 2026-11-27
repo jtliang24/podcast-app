@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { FileJson, Save, Settings, X } from 'lucide-react';
-import { SKIP_INTERVALS } from '../types';
+import { SKIP_INTERVALS, SPEED_PRESETS } from '../types';
 import type { CellularDownload, SkipInterval } from '../types';
+import { formatSpeed } from '../services/preferences';
 import type { Preferences } from '../services/preferences';
 
 interface Props {
@@ -153,6 +154,12 @@ export default function SettingsButton({ preferences, onChange, onImport, onExpo
                 </select>
               </label>
             </div>
+            <label className="block space-y-1 text-sm text-slate-200">
+              <span>Default speed</span>
+              <select className={selectClass} value={preferences.playbackSpeed} onChange={event => onChange({ playbackSpeed: Number(event.currentTarget.value) })}>
+                {[...new Set([...SPEED_PRESETS, preferences.playbackSpeed])].sort((a, b) => a - b).map(value => <option key={value} value={value}>{formatSpeed(value)}</option>)}
+              </select>
+            </label>
           </section>
         </div>
         {/* Data Portability Section */}

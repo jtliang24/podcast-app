@@ -33,3 +33,8 @@ export function getPreferences(state: AppState): Preferences {
     playbackSpeed: speed(state.playbackSpeed, 1),
   };
 }
+
+/** Label for a speed, dropping trailing zeros: 1 -> "1×", 1.25 -> "1.25×". */
+export function formatSpeed(value: number) {
+  return `${Number(value.toFixed(2))}×`;
+}
