@@ -7,7 +7,7 @@ interface SidebarProps {
   state: AppState;
   onSubscriptionSortChange: (change: Pick<AppState, 'subscriptionSortField' | 'subscriptionSortDirection'>) => void;
   viewMode: 'search' | 'downloads' | 'new-releases';
-  setViewMode: (mode: 'search' | 'downloads' | 'new-releases') => void;
+  setViewMode: (mode: 'downloads' | 'new-releases') => void;
   selectedPodcast: Podcast | null;
   selectPodcast: (podcast: Podcast) => void;
   handleUnsubscribe: (feedUrl: string) => void;

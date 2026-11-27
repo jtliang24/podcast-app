@@ -92,3 +92,7 @@ export const AndroidDrive = registerPlugin<{
   authorize(options: { interactive: boolean }): Promise<{ token?: string }>;
   clearToken(options: { token: string }): Promise<void>;
 }>('PodcastDrive');
+
+export const AndroidNavigation = registerPlugin<{
+  setBackEnabled(options: { enabled: boolean }): Promise<void>;
+}>('PodcastNavigation');

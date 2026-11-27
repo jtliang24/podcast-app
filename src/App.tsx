@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useAppNavigation } from './hooks/useAppNavigation';
 import { useDriveLogin } from './hooks/useDriveLogin';
 import { searchStateFile, createStateFile } from './services/driveService';
 import { useFileSystem } from './hooks/useFileSystem';
@@ -13,7 +14,7 @@ import { getPreferences } from './services/preferences';
 import { latestEpisodeRelease, releaseDatesByPodcast } from './services/subscriptionSort';
 import { moveQueuedEpisode, normalizeState, orderedQueue, queueEpisode, removeQueuedEpisode } from './services/playbackQueue';
 import type { Podcast, Episode, SortOrder, QueueEpisode, QueueTier } from './types';
-import { Loader2, FolderOpen, Plus, Cloud, X } from 'lucide-react';
+import { ArrowLeft, Loader2, FolderOpen, Plus, Cloud, X } from 'lucide-react';
 import { INITIAL_STATE } from './types';
 
 // Components
@@ -137,56 +138,32 @@ function Library({ storage, profile, downloads, connection }: {
     }
   };
 
-  const [viewMode, setViewMode] = useState<'search' | 'downloads' | 'new-releases'>('search');
-  const [queueOpen, setQueueOpen] = useState(() => history.state?.podcastQueue === true);
-  const queueButton = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const onBack = () => {
-      const open = history.state?.podcastQueue === true;
-      setQueueOpen(open);
-      if (queueOpen && !open) queueButton.current?.focus({ preventScroll: true });
-    };
-    window.addEventListener('popstate', onBack);
-    return () => window.removeEventListener('popstate', onBack);
-  }, [queueOpen]);
-  const closeQueue = () => history.back();
-  const toggleQueue = () => {
-    if (queueOpen) closeQueue();
-    else {
-      history.pushState({ ...history.state, podcastQueue: true }, '');
-      setQueueOpen(true);
-      window.scrollTo(0, 0);
-    }
-  };
-  const [searchQuery, setSearchQuery] = useState('');
+  const ready = !isLoading && !setupToken && (storageMode === 'google-drive'
+    ? driveReady : !isFileSystemAccessSupported || !!fileHandle);
+  const {
+    page, previousPage, searchInput, visit, contentRef, queueButton,
+    showLibrary, setShowLibrary, setSearchInput, goTo, back, isCurrentVisit, updatePage,
+  } = useAppNavigation(ready);
+  const listPage = page.kind === 'episode' ? previousPage : page;
+  const viewMode = listPage?.kind === 'downloads' || listPage?.kind === 'new-releases' ? listPage.kind : 'search';
+  const queueOpen = page.kind === 'queue';
+  const podcastPage = page.kind === 'podcast' ? page : null;
+  const selectedPodcast = listPage?.kind === 'podcast' ? listPage.podcast : null;
+  const selectedEpisode = page.kind === 'episode' ? page.episode : null;
   const [urlInput, setUrlInput] = useState('');
-  const [isAddingByUrl, setIsAddingByUrl] = useState(false);
-  const [searchResults, setSearchResults] = useState<Podcast[]>([]);
-  const [selectedPodcast, setSelectedPodcast] = useState<Podcast | null>(null);
-  const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
-  const activeFeedRef = useRef<string | null>(null);
-
-  const switchView = useCallback((mode: 'search' | 'downloads' | 'new-releases') => {
-    setViewMode(mode);
-    setSelectedEpisode(null);
-  }, []);
-  const [allEpisodes, setAllEpisodes] = useState<Episode[]>([]);
-  const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [addingVisit, setAddingVisit] = useState<number | null>(null);
   const [isRefreshingNewReleases, setIsRefreshingNewReleases] = useState(false);
   const attemptedReleaseDateBackfill = useRef(false);
   const releasesRequestInFlight = useRef(false);
-  
-  const [showLibrary, setShowLibrary] = useState(false);
   const { downloadsReady, downloadedEpisodes, downloadingIds, removeDownload } = downloads;
 
-  const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{ visit: number; message: string } | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [importingStatus, setImportingStatus] = useState<string | null>(null);
   const preferences = getPreferences(state);
   const { skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads } = preferences;
-  const ready = !isLoading && !setupToken && (storageMode === 'google-drive'
-    ? driveReady : !isFileSystemAccessSupported || !!fileHandle);
+
+  const setError = (message: string | null) => setActionError(message ? { visit, message } : null);
 
   const handleDeleteDownload = useCallback(async (episodeId: string) => {
     try {
@@ -283,14 +260,17 @@ function Library({ storage, profile, downloads, connection }: {
   }, [ready, togglePlay, skip, skipBackwardSeconds, skipForwardSeconds]);
 
   // Search and Subscription Handlers
-  const handleSearch = async (e: React.FormEvent) => {
+  const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    setViewMode('search');
-    setSelectedEpisode(null);
-    if (!searchQuery) return;
+    const query = searchInput.trim();
+    if (!query) return;
+    const destination = { kind: 'search' as const, query };
     setError(null);
-    const results = await searchPodcasts(searchQuery);
-    setSearchResults(results);
+    if (page.kind === 'search' && page.query === query) {
+      if (page.results) updatePage(visit, destination);
+    } else {
+      goTo(destination);
+    }
   };
 
   const addSubscription = async (podcast: Podcast, episodes?: Episode[]) => {
@@ -310,42 +290,42 @@ function Library({ storage, profile, downloads, connection }: {
     return added;
   };
 
-  const savePodcastReleaseDate = (feedUrl: string, episodes: Episode[]) => {
+  const savePodcastReleaseDate = useCallback((feedUrl: string, episodes: Episode[]) => {
     const releaseDate = latestEpisodeRelease(episodes);
     void updateState(prev => {
       if (prev.podcastReleaseDates?.[feedUrl] === releaseDate
         || !prev.subscriptions.some(podcast => podcast.feedUrl === feedUrl)) return prev;
       return { ...prev, podcastReleaseDates: { ...prev.podcastReleaseDates, [feedUrl]: releaseDate } };
     });
-  };
+  }, [updateState]);
 
   const handleAddByUrl = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!urlInput) return;
+    if (!urlInput.trim() || addingVisit === visit) return;
     setError(null);
-    setIsAddingByUrl(true);
+    setAddingVisit(visit);
     try {
       const { podcast, episodes } = await fetchPodcastFeed(urlInput.trim());
-      if (!await addSubscription(podcast, episodes)) {
+      if (!isCurrentVisit(visit)) return;
+      const added = await addSubscription(podcast, episodes);
+      if (!isCurrentVisit(visit)) return;
+      if (!added) {
         setError('Already subscribed to this podcast');
-        setIsAddingByUrl(false);
         return;
       }
 
       setUrlInput('');
       selectPodcast(podcast, episodes);
     } catch (err) {
+      if (!isCurrentVisit(visit)) return;
       console.error(err);
       setError(err instanceof PrivateFeedError ? err.message : 'Failed to fetch podcast from URL. Ensure it is a valid RSS feed.');
     } finally {
-      setIsAddingByUrl(false);
+      setAddingVisit(pending => pending === visit ? null : pending);
     }
   };
 
   const handleSubscribe = async (podcast: Podcast) => {
-    setSearchResults([]);
-    setSearchQuery('');
-    setSelectedEpisode(null);
     if (!await addSubscription(podcast)) return;
     try {
       const { episodes } = await fetchPodcastFeed(podcast.feedUrl);
@@ -360,8 +340,10 @@ function Library({ storage, profile, downloads, connection }: {
       ...prev, 
       subscriptions: prev.subscriptions.filter(s => s.feedUrl !== feedUrl) 
     }));
-    if (selectedPodcast?.feedUrl === feedUrl) setSelectedPodcast(null);
-    if (selectedEpisode?.podcastId === feedUrl) setSelectedEpisode(null);
+    if (selectedPodcast?.feedUrl === feedUrl || selectedEpisode?.podcastId === feedUrl) {
+      setShowLibrary(false);
+      back();
+    }
   };
 
   // Sorting and Loading
@@ -386,62 +368,60 @@ function Library({ storage, profile, downloads, connection }: {
     });
   }, []);
 
-  const selectPodcast = async (podcast: Podcast, loadedEpisodes?: Episode[]) => {
-    setViewMode('search');
-    setSelectedPodcast(podcast);
-    setSelectedEpisode(null);
-    activeFeedRef.current = podcast.feedUrl;
-    setEpisodes([]);
-    setAllEpisodes([]);
-    setError(null);
-    setIsLoadingEpisodes(true);
-
-    try {
-      const fetchedEpisodes = loadedEpisodes ?? (await fetchPodcastFeed(podcast.feedUrl)).episodes;
-      if (!loadedEpisodes) savePodcastReleaseDate(podcast.feedUrl, fetchedEpisodes);
-      if (activeFeedRef.current !== podcast.feedUrl) return;
-
-      const order = state.podcastSortOrders[podcast.feedUrl] || 'newest';
-      const sortedEpisodes = sortEpisodes(fetchedEpisodes, order);
-
-      setAllEpisodes(sortedEpisodes);
-      setIsLoadingEpisodes(false);
-
-      if (sortedEpisodes.length <= 100) {
-        setEpisodes(sortedEpisodes);
-      } else {
-        const initialChunk = sortedEpisodes.slice(0, 20);
-        setEpisodes(initialChunk);
-
-        let currentIndex = 20;
-        const chunkSize = 50;
-        const autoLimit = 120;
-
-        const loadNextAutoChunk = () => {
-          if (activeFeedRef.current !== podcast.feedUrl) return;
-          if (currentIndex >= autoLimit || currentIndex >= sortedEpisodes.length) return;
-
-          const nextIndex = Math.min(currentIndex + chunkSize, autoLimit, sortedEpisodes.length);
-          const nextChunk = sortedEpisodes.slice(currentIndex, nextIndex);
-
-          setEpisodes(prev => [...prev, ...nextChunk]);
-          currentIndex = nextIndex;
-
-          if (currentIndex < autoLimit && currentIndex < sortedEpisodes.length) {
-            setTimeout(loadNextAutoChunk, 150);
-          }
-        };
-
-        setTimeout(loadNextAutoChunk, 100);
-      }
-    } catch (e) {
-      if (activeFeedRef.current === podcast.feedUrl) {
-        console.error(e);
-        setError(e instanceof PrivateFeedError ? e.message : 'Could not load episodes from this feed. Check the feed URL or try again later.');
-        setIsLoadingEpisodes(false);
-      }
+  const selectPodcast = (podcast: Podcast, loadedEpisodes?: Episode[]) => {
+    setShowLibrary(false);
+    const destination = {
+      kind: 'podcast' as const, podcast, episodes: loadedEpisodes,
+      visibleCount: loadedEpisodes && loadedEpisodes.length > 100 ? 20 : loadedEpisodes?.length ?? 0,
+    };
+    if (podcastPage?.podcast.feedUrl === podcast.feedUrl) {
+      if (podcastPage.episodes || podcastPage.error || loadedEpisodes) updatePage(visit, destination);
+    } else {
+      goTo(destination);
     }
   };
+
+  useEffect(() => {
+    if (!ready) return;
+    let live = true;
+    if (page.kind === 'search' && !page.results) {
+      void searchPodcasts(page.query).then(results => {
+        if (live) updatePage(visit, { ...page, results });
+      });
+    }
+    if (page.kind === 'podcast' && !page.episodes && !page.error) {
+      const { feedUrl } = page.podcast;
+      void fetchPodcastFeed(feedUrl).then(({ episodes }) => {
+        if (!live || !isCurrentVisit(visit)) return;
+        savePodcastReleaseDate(feedUrl, episodes);
+        updatePage(visit, { ...page, episodes, visibleCount: episodes.length <= 100 ? episodes.length : 20 });
+      }).catch(err => {
+        if (!live || !isCurrentVisit(visit)) return;
+        console.error(err);
+        const error = err instanceof PrivateFeedError ? err.message
+          : 'Could not load episodes from this feed. Check the feed URL or try again later.';
+        updatePage(visit, { ...page, error });
+      });
+    }
+    return () => { live = false; };
+  }, [ready, page, visit, isCurrentVisit, savePodcastReleaseDate, updatePage]);
+
+  const podcastEpisodes = podcastPage?.episodes;
+  const order = podcastPage ? state.podcastSortOrders[podcastPage.podcast.feedUrl] || 'newest' : 'newest';
+  const allEpisodes = useMemo(() => podcastEpisodes ? sortEpisodes(podcastEpisodes, order) : [],
+    [podcastEpisodes, order, sortEpisodes]);
+  const visibleCount = podcastPage?.visibleCount ?? 0;
+  const episodes = useMemo(() => allEpisodes.slice(0, visibleCount), [allEpisodes, visibleCount]);
+
+  useEffect(() => {
+    if (!podcastPage || allEpisodes.length <= 100) return;
+    const autoLimit = Math.min(120, allEpisodes.length);
+    if (visibleCount >= autoLimit) return;
+    const timer = setTimeout(() => {
+      updatePage(visit, { ...podcastPage, visibleCount: Math.min(visibleCount + 50, autoLimit) });
+    }, visibleCount === 20 ? 100 : 150);
+    return () => clearTimeout(timer);
+  }, [podcastPage, allEpisodes.length, visibleCount, visit, updatePage]);
 
   const handleSortChange = useCallback((order: SortOrder) => {
     if (!selectedPodcast) return;
@@ -453,18 +433,14 @@ function Library({ storage, profile, downloads, connection }: {
         [selectedPodcast.feedUrl]: order
       }
     }));
-
-    const sorted = sortEpisodes(allEpisodes, order);
-    setAllEpisodes(sorted);
-    setEpisodes(sorted.slice(0, Math.max(20, episodes.length)));
-  }, [selectedPodcast, allEpisodes, episodes.length, updateState, sortEpisodes]);
+  }, [selectedPodcast, updateState]);
 
   const loadMoreEpisodes = useCallback(() => {
-    if (episodes.length < allEpisodes.length) {
-      const nextChunk = allEpisodes.slice(episodes.length, episodes.length + 100);
-      setEpisodes(prev => [...prev, ...nextChunk]);
-    }
-  }, [episodes.length, allEpisodes]);
+    if (!podcastPage) return;
+    updatePage(visit, { ...podcastPage, visibleCount: Math.min(visibleCount + 100, allEpisodes.length) });
+  }, [podcastPage, visit, visibleCount, allEpisodes.length, updatePage]);
+
+  const showEpisode = (episode: Episode) => goTo({ kind: 'episode', episode, podcast: selectedPodcast });
 
   // Bulk Actions
   const handleMarkOlderAsPlayed = useCallback((episode: Episode) => {
@@ -727,9 +703,12 @@ function Library({ storage, profile, downloads, connection }: {
           state={state}
           onSubscriptionSortChange={change => void updateState(prev => ({ ...prev, ...change }))}
           viewMode={viewMode}
-          setViewMode={mode => { switchView(mode); setShowLibrary(false); }}
+          setViewMode={mode => {
+            setShowLibrary(false);
+            if (page.kind !== mode) goTo({ kind: mode });
+          }}
           selectedPodcast={selectedPodcast}
-          selectPodcast={podcast => { selectPodcast(podcast); setShowLibrary(false); }}
+          selectPodcast={selectPodcast}
           handleUnsubscribe={handleUnsubscribe}
           handleImportOPML={handleImportOPML}
           handleExportOPML={handleExportOPML}
@@ -767,7 +746,7 @@ function Library({ storage, profile, downloads, connection }: {
             </button>
           </div>
         )}
-        {offer && (hasRemoteOffer || (!isPlaying && viewMode === 'search' && !selectedPodcast && !selectedEpisode && !searchResults.length)) && (
+        {offer && (hasRemoteOffer || (!isPlaying && page.kind === 'home')) && (
           <section className="mx-4 mt-4 rounded-2xl border border-slate-700 bg-slate-900 p-4 md:mx-6">
             <p className="text-sm text-slate-300">{state.subscriptions.find(p => p.feedUrl === offer.episode.podcastId)?.title || offer.episode.podcastId}</p>
             <h2 className="mb-3 font-bold">{offer.episode.title}</h2>
@@ -777,49 +756,54 @@ function Library({ storage, profile, downloads, connection }: {
           </section>
         )}
         <Header 
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
+          searchQuery={searchInput}
+          setSearchQuery={setSearchInput}
           urlInput={urlInput}
           setUrlInput={setUrlInput}
           handleSearch={handleSearch}
           handleAddByUrl={handleAddByUrl}
-          isAddingByUrl={isAddingByUrl}
-          error={error}
+          isAddingByUrl={addingVisit === visit}
+          error={(actionError?.visit === visit ? actionError.message : null) ?? podcastPage?.error ?? null}
           importingStatus={importingStatus}
         />
 
-        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-          {selectedEpisode ? (
+        <div ref={contentRef} className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+          {page.kind !== 'home' && page.kind !== 'episode' && !queueOpen && (
+            <button type="button" onClick={back} className="mb-3 flex min-h-11 items-center gap-2 rounded text-sm font-semibold text-slate-300 hover:text-white">
+              <ArrowLeft size={20} aria-hidden="true" /> Back
+            </button>
+          )}
+          {page.kind === 'episode' ? (
             <EpisodeDescriptionView 
-              episode={selectedEpisode}
-              podcast={state.subscriptions.find(s => s.feedUrl === selectedEpisode.podcastId) || selectedPodcast || undefined}
-              onBack={() => setSelectedEpisode(null)}
+              episode={page.episode}
+              podcast={state.subscriptions.find(s => s.feedUrl === page.episode.podcastId) || page.podcast || undefined}
+              onBack={back}
               onPlay={playEpisode}
-              isCurrent={currentEpisode?.id === selectedEpisode.id}
+              isCurrent={currentEpisode?.id === page.episode.id}
               isPlaying={isPlaying}
               onAddToQueue={addToQueue}
               onDownload={handleDownload}
               onDeleteDownload={handleDeleteDownload}
               downloadStatus={
-                downloadedEpisodes.some(d => d.id === selectedEpisode.id) 
+                downloadedEpisodes.some(d => d.id === page.episode.id)
                   ? 'downloaded' 
-                  : (downloadingIds.has(selectedEpisode.id) ? 'downloading' : 'none')
+                  : (downloadingIds.has(page.episode.id) ? 'downloading' : 'none')
               }
             />
-          ) : viewMode === 'downloads' ? (
+          ) : page.kind === 'downloads' ? (
             <DownloadsView 
               state={state}
               downloadedEpisodes={downloadedEpisodes}
               currentEpisode={currentEpisode}
               isPlaying={isPlaying}
               playEpisode={playEpisode}
-              onShowDescription={setSelectedEpisode}
+              onShowDescription={showEpisode}
               handleDownload={handleDownload}
               handleDeleteDownload={handleDeleteDownload}
               addToQueue={addToQueue}
               toggleEpisodePlayed={toggleEpisodePlayed}
             />
-          ) : viewMode === 'new-releases' ? (
+          ) : page.kind === 'new-releases' ? (
             <NewReleasesView 
               state={state}
               isRefreshingNewReleases={isRefreshingNewReleases}
@@ -828,7 +812,7 @@ function Library({ storage, profile, downloads, connection }: {
               currentEpisode={currentEpisode}
               isPlaying={isPlaying}
               playEpisode={playEpisode}
-              onShowDescription={setSelectedEpisode}
+              onShowDescription={showEpisode}
               downloadedEpisodes={downloadedEpisodes}
               downloadingIds={downloadingIds}
               handleDownload={handleDownload}
@@ -836,22 +820,24 @@ function Library({ storage, profile, downloads, connection }: {
               addToQueue={addToQueue}
               toggleEpisodePlayed={toggleEpisodePlayed}
             />
-          ) : searchResults.length > 0 ? (
-            <SearchResultsView 
-              searchResults={searchResults}
+          ) : page.kind === 'search' ? (
+            <SearchResultsView
+              searchResults={page.results}
+              subscriptions={state.subscriptions}
+              selectPodcast={selectPodcast}
               handleSubscribe={handleSubscribe}
             />
-          ) : selectedPodcast ? (
+          ) : podcastPage ? (
             <PodcastView 
               state={state}
-              selectedPodcast={selectedPodcast}
-              isLoadingEpisodes={isLoadingEpisodes}
+              selectedPodcast={podcastPage.podcast}
+              isLoadingEpisodes={!podcastPage.episodes && !podcastPage.error}
               episodes={episodes}
               allEpisodes={allEpisodes}
               currentEpisode={currentEpisode}
               isPlaying={isPlaying}
               playEpisode={playEpisode}
-              onShowDescription={setSelectedEpisode}
+              onShowDescription={showEpisode}
               downloadedEpisodes={downloadedEpisodes}
               downloadingIds={downloadingIds}
               handleDownload={handleDownload}
@@ -878,7 +864,7 @@ function Library({ storage, profile, downloads, connection }: {
             queue={waiting}
             currentEpisode={currentEpisode ?? state.lastPlayingEpisode ?? null}
             podcasts={state.subscriptions}
-            onBack={closeQueue}
+            onBack={back}
             onMove={moveInQueue}
             onPlay={playEpisode}
             onRemove={removeFromQueue}
@@ -890,7 +876,7 @@ function Library({ storage, profile, downloads, connection }: {
         queueButton={queueButton}
         queueOpen={queueOpen}
         queueCount={waiting.primary.length + waiting.secondary.length}
-        onQueue={toggleQueue}
+        onQueue={() => queueOpen ? back() : goTo({ kind: 'queue' })}
         currentEpisode={currentEpisode}
         playingPodcast={playingPodcast}
         isPlaying={isPlaying}
