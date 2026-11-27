@@ -296,7 +296,7 @@ public class PlaybackService extends MediaSessionService {
     /** Changes the current track's speed without reloading it. A stale request for another episode is ignored. */
     private void setSpeed(String episodeId, double speed) {
         if (current == null || !current.id().equals(episodeId)) return;
-        current = current.at(current.position, Track.speed(speed));
+        current.setSpeed(Track.speed(speed));
         player.setPlaybackSpeed((float) current.speed);
     }
 
@@ -675,7 +675,7 @@ public class PlaybackService extends MediaSessionService {
         final JSObject data;
         final JSONObject episode;
         final long position;
-        final double speed;
+        double speed;
 
         private Track(JSObject data, JSONObject episode, long position, double speed) {
             this.data = data;
@@ -698,13 +698,15 @@ public class PlaybackService extends MediaSessionService {
         }
 
         Track at(long time) {
-            return at(time, speed);
-        }
-
-        Track at(long time, double speed) {
             return new Track(new JSObject().put("episode", episode).put("time", time / 1000.0)
                 .put("artworkUrl", data.optString("artworkUrl")).put("podcastTitle", data.optString("podcastTitle"))
                 .put("playbackSpeed", speed), episode, time, speed);
+        }
+
+        /** Changes the speed in place, so the track keeps its identity for the end-of-episode check. */
+        void setSpeed(double value) {
+            speed = value;
+            data.put("playbackSpeed", value);
         }
 
         String id() {
