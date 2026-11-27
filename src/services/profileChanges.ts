@@ -49,6 +49,7 @@ export interface Profile {
   lastCheckpointUpload?: Record<string, number>;
   fileIds?: string[];
   feed?: { token: string; scanPage?: string };
+  initialPullComplete?: boolean;
   lastPull?: number;
   pullLease?: { owner: string; until: number };
   pullRetryAt?: number;
@@ -211,7 +212,7 @@ function applyEpisodeMetadata(profile: Profile, episode: Episode, time: number, 
   (profile.episodes ??= {})[episode.audioUrl] = episode;
 }
 
-// On a first offline launch, edits can precede the initial snapshot download.
+// Edits saved by older versions can precede the initial snapshot download.
 export function seedProfile(profile: Profile, snapshot: StateSnapshot) {
   if (profile.seeded) return profile;
   const seeded = { ...profile, ...newProfile(snapshot), episodes: undefined, sessionUrl: undefined,

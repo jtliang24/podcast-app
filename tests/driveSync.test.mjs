@@ -5,6 +5,7 @@ import { newProfile, recordEdit, applyBatch, seedProfile } from '../src/services
 import { DriveSync, resumePoint } from '../src/services/driveSync.ts';
 import { searchStateFile } from '../src/services/driveService.ts';
 import { getPreferences } from '../src/services/preferences.ts';
+import { androidPlaybackOpen } from '../src/services/androidPlaybackState.ts';
 
 const ep = { id: 'episode', audioUrl: 'audio', podcastId: 'feed', title: 'An episode' };
 const show = { feedUrl: 'feed', title: 'A podcast' };
@@ -65,19 +66,27 @@ test('different preferences merge independently and survive a JSON round trip', 
 });
 
 // A transaction commits a structured clone, like IndexedDB. Each device has its own store.
-function deviceStore() {
+function deviceStore(beforeCommit) {
   const profiles = new Map();
   return async (id, edit) => {
     const p = structuredClone(profiles.get(id) ?? newProfile());
     const next = edit?.(p) ?? p;
-    if (edit) profiles.set(id, structuredClone(next));
+    if (edit) {
+      if (beforeCommit) await beforeCommit(next);
+      profiles.set(id, structuredClone(next));
+    }
     return next;
   };
 }
 
 function syncSession(t, store, token, device) {
   const events = {};
-  const listeners = Object.fromEntries(['status', 'state', 'expired', 'remote'].map(k => [k, v => { events[k] = v; }]));
+  const listeners = Object.fromEntries(['status', 'expired', 'remote'].map(k => [k, v => { events[k] = v; }]));
+  listeners.state = (state, ready) => {
+    events.state = state;
+    events.ready = ready;
+    if (ready) events.firstReadyState ??= state;
+  };
   const engine = new DriveSync('library', token, device, listeners, store);
   t.after(() => engine.stop());
   return { engine, events };
@@ -88,6 +97,97 @@ async function until(check, attempts = 100) {
   assert.ok(check());
 }
 
+test('the first playback state waits for all historical pages and the empty terminal page to commit', { timeout: 5000 }, async t => {
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
+  globalThis.window = {};
+  t.after(() => { delete navigator.onLine; delete globalThis.window; });
+
+  const snapshot = { ...position(10)(newProfile().state), subscriptions: [show] };
+  const source = newProfile(snapshot);
+  const queued = { ...ep, id: 'queued', audioUrl: 'queued' };
+  const later = { ...ep, id: 'later', audioUrl: 'later' };
+  const queue = { primary: [queued], secondary: [later] };
+  recordEdit(source, state => ({ ...state, queue: { ...queue, secondary: [] } }), 'source', true, 20);
+  recordEdit(source, state => ({ ...state, queue }), 'source', true, 30);
+  recordEdit(source, position(47), 'source', true, 47);
+  const batches = source.pending.map(({ batch }) => batch);
+  const files = batches.map(({ id }) => ({ id, name: id, appProperties: { profile: 'library' } }));
+
+  const historyRequested = Promise.withResolvers();
+  const finishHistory = Promise.withResolvers();
+  const terminalRequested = Promise.withResolvers();
+  const finishTerminal = Promise.withResolvers();
+  const terminalStaged = Promise.withResolvers();
+  const commitTerminal = Promise.withResolvers();
+  t.after(() => { finishHistory.resolve(); finishTerminal.resolve(); commitTerminal.resolve(); });
+
+  const store = deviceStore(async profile => {
+    if (profile.initialPullComplete) {
+      terminalStaged.resolve(profile);
+      await commitTerminal.promise;
+    }
+  });
+  t.mock.method(globalThis, 'fetch', async url => {
+    const u = new URL(url);
+    const cursor = u.searchParams.get('pageToken');
+    if (u.pathname.endsWith('/startPageToken')) return Response.json({ startPageToken: 'start' });
+    if (u.searchParams.get('alt') === 'media') {
+      const id = u.pathname.split('/').at(-1);
+      return Response.json(id === 'library' ? snapshot : batches.find(batch => batch.id === id));
+    }
+    if (u.pathname.endsWith('/files')) {
+      if (!cursor) return Response.json({ files: [files[0]], nextPageToken: 'history-2' });
+      assert.equal(cursor, 'history-2');
+      historyRequested.resolve();
+      await finishHistory.promise;
+      return Response.json({ files: [files[1]] });
+    }
+    assert.ok(u.pathname.endsWith('/changes'));
+    if (cursor === 'start') return Response.json({ changes: [{ file: files[2] }], nextPageToken: 'terminal' });
+    assert.equal(cursor, 'terminal');
+    terminalRequested.resolve();
+    await finishTerminal.promise;
+    return Response.json({ changes: [], newStartPageToken: 'caught-up' });
+  });
+
+  const tab = syncSession(t, store, 'valid', 'desktop');
+  const peer = syncSession(t, store, 'valid', 'desktop');
+  peer.engine.setEnvironment('offline', true, false);
+  await Promise.all([tab.engine.restore(), peer.engine.restore()]);
+  await historyRequested.promise;
+  assert.equal(tab.events.ready, false);
+  assert.deepEqual(tab.events.state.queue, { ...queue, secondary: [] });
+  assert.equal(await tab.engine.edit(() => assert.fail('Initial sync must block this edit'), true), false);
+
+  finishHistory.resolve();
+  await terminalRequested.promise;
+  assert.equal(resumePoint(tab.events.state).time, 47);
+  assert.equal(tab.events.ready, false);
+  assert.equal(tab.events.remote, undefined);
+  assert.equal(peer.events.ready, false);
+  assert.equal(await tab.engine.edit(() => assert.fail('The historical scan alone cannot unlock edits'), true), false);
+
+  finishTerminal.resolve();
+  const staged = await terminalStaged.promise;
+  assert.equal(staged.feed.token, 'caught-up');
+  const beforeCommit = await store('library');
+  assert.equal(beforeCommit.feed.token, 'terminal');
+  assert.equal(beforeCommit.initialPullComplete, undefined);
+  assert.equal(tab.events.firstReadyState, undefined);
+  assert.equal(peer.events.firstReadyState, undefined);
+
+  commitTerminal.resolve();
+  await until(() => tab.events.ready && peer.events.ready);
+  for (const { events } of [tab, peer]) {
+    const open = androidPlaybackOpen(events.firstReadyState);
+    assert.equal(open.track.episode.id, ep.id);
+    assert.equal(open.track.time, 47);
+    assert.equal(open.updated, 47);
+    assert.deepEqual(open.queue.map(track => track.episode), [queued, later]);
+    assert.equal(events.remote, undefined);
+  }
+});
+
 function driveFeed(url, uploads = []) {
   if (url.pathname.endsWith('/startPageToken')) return Response.json({ startPageToken: String(uploads.length) });
   if (!url.pathname.endsWith('/changes')) return;
@@ -96,7 +196,7 @@ function driveFeed(url, uploads = []) {
   return Response.json({ changes, newStartPageToken: String(uploads.length) });
 }
 
-test('offline restart, expired access, lost upload acknowledgement and foreground handoff', async t => {
+test('an initialized legacy cache supports offline edits, restart and reconnect reconciliation', async t => {
   let online = false;
   Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => online });
   t.after(() => delete navigator.onLine);
@@ -132,6 +232,9 @@ test('offline restart, expired access, lost upload acknowledgement and foregroun
     return Response.json({ files: [...uploads.values()].map(({ meta }) => meta) });
   });
   const phone = deviceStore();
+  await phone('library', p => Object.assign(seedProfile(p, { subscriptions: [show] }), {
+    feed: { token: '0' }, lastPull: Date.now() - 1000,
+  }));
   online = true;
   const desktop = syncSession(t, deviceStore(), 'valid', 'desktop');
   await desktop.engine.restore();
@@ -141,16 +244,18 @@ test('offline restart, expired access, lost upload acknowledgement and foregroun
   online = false;
   const first = syncSession(t, phone, 'expired', 'phone');
   await first.engine.restore();
-  await first.engine.edit(position(60), false, true);
+  assert.equal(first.events.ready, true);
+  assert.equal(await first.engine.edit(position(60), false, true), true);
   const queue = {
     primary: ['first', 'second'].map(id => ({ ...ep, id, audioUrl: id })),
     secondary: ['third', 'fourth'].map(id => ({ ...ep, id, audioUrl: id })),
   };
-  await first.engine.edit(state => ({ ...position(42.75)(state), queue }), true);
+  assert.equal(await first.engine.edit(state => ({ ...position(42.75)(state), queue }), true), true);
   assert.equal(first.events.status, 'Saved on this device');
   first.engine.stop();
   const reopened = syncSession(t, phone, 'expired', 'phone');
   await reopened.engine.restore();
+  assert.equal(reopened.events.ready, true);
   assert.equal(resumePoint(reopened.events.state).time, 42.75);
   assert.deepEqual(reopened.events.state.queue, queue);
   online = true;
@@ -297,6 +402,7 @@ test('only visible paused Wi-Fi tabs poll, with one shared check per interval', 
   await shared('library', p => {
     const seeded = seedProfile(p, {});
     seeded.feed = { token: '10000' };
+    seeded.initialPullComplete = true;
     seeded.applied = Object.fromEntries(Array.from({ length: 10_000 }, (_, i) => ['historical-' + i, true]));
     return seeded;
   });
@@ -315,7 +421,7 @@ test('only visible paused Wi-Fi tabs poll, with one shared check per interval', 
     }
     return Response.json({ changes: [], newStartPageToken: '10000' });
   });
-  const a = syncSession(t, shared, 'valid', 'desktop').engine;
+  const { engine: a, events: desktop } = syncSession(t, shared, 'valid', 'desktop');
   const b = syncSession(t, shared, 'valid', 'desktop').engine;
   await Promise.all([a.restore(), b.restore()]);
   await tick();
@@ -337,6 +443,8 @@ test('only visible paused Wi-Fi tabs poll, with one shared check per interval', 
   await tick(15_000);
   await tick();
   assert.equal(requests.length, 4);
+  assert.equal(desktop.ready, true);
+  assert.equal(await a.edit(state => state), true);
   a.setEnvironment('limited', true, false);
   b.setEnvironment('limited', true, false);
   inFlight.resolve();
@@ -433,9 +541,10 @@ test('a delayed metadata batch resolves the latest session through an intentiona
   assert.equal(resumePoint(receiver.state).time, 12);
 });
 
-test('change pages resume atomically after a failure and respect Retry-After', async t => {
+test('an incomplete cache resumes from its saved cursor and uploads pending edits after the terminal commit', async t => {
   const tick = useClock(t);
   const store = deviceStore();
+  await store('library', p => recordEdit(p, state => ({ ...state, autoDownloadQueued: true }), 'desktop', true, 40));
   const remote = newProfile({});
   recordEdit(remote, position(55), 'phone', true, 51);
   recordEdit(remote, position(13), 'phone', true, 52);
@@ -443,9 +552,17 @@ test('change pages resume atomically after a failure and respect Retry-After', a
   const batches = remote.pending.map(entry => entry.batch);
   const files = batches.map(batch => ({ id: batch.id, name: batch.id, appProperties: { profile: 'library' } }));
   const requests = [];
+  const uploads = [];
   let fail = true;
-  t.mock.method(globalThis, 'fetch', async url => {
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
     const u = new URL(url);
+    if (u.pathname.endsWith('/generateIds')) return Response.json({ ids: ['reserved'] });
+    if (options.method === 'POST') {
+      assert.equal((await store('library')).initialPullComplete, true);
+      const parts = options.body.split('\r\n');
+      uploads.push(JSON.parse(parts[7]));
+      return Response.json({ id: 'reserved' });
+    }
     if (u.pathname.endsWith('/startPageToken')) {
       requests.push('start');
       return Response.json({ startPageToken: 'first' });
@@ -478,13 +595,18 @@ test('change pages resume atomically after a failure and respect Retry-After', a
   assert.deepEqual(requests, ['start', 'snapshot', 'scan', 'first', 'second']);
   let profile = await store('library');
   assert.equal(profile.feed.token, 'second');
+  assert.equal(profile.initialPullComplete, undefined);
   assert.equal(resumePoint(profile.state).time, 55);
   assert.equal(profile.state.skipForwardSeconds, undefined);
   assert.equal(profile.applied[batches[1].id], undefined);
+  assert.equal(first.events.ready, false);
+  assert.equal(profile.pending.length, 1);
+  assert.equal(uploads.length, 0);
   first.engine.stop();
 
   const second = syncSession(t, store, 'valid', 'desktop');
   await second.engine.restore();
+  assert.equal(second.events.ready, false);
   await tick();
   await tick(6999);
   assert.equal(requests.length, 5);
@@ -495,8 +617,12 @@ test('change pages resume atomically after a failure and respect Retry-After', a
   profile = await store('library');
   assert.equal(requests.at(-1), 'second');
   assert.equal(profile.feed.token, 'caught-up');
-  assert.equal(second.events.remote.time, 13);
+  assert.equal(profile.initialPullComplete, true);
+  assert.equal(resumePoint(second.events.firstReadyState).time, 13);
   assert.equal(profile.state.skipForwardSeconds, 60);
+  assert.equal(profile.state.autoDownloadQueued, true);
+  assert.deepEqual(uploads.map(batch => batch.changes), [[{ field: 'autoDownloadQueued', value: true }]]);
+  assert.equal(profile.pending.length, 0);
 });
 
 test('Wi-Fi receives a cellular pause on its next poll and cellular receives a rewind on foreground', async t => {

@@ -1,7 +1,33 @@
-import type { AppState } from '../types.ts';
-import type { AndroidPlaybackState } from './android.ts';
+import type { AppState, Episode } from '../types.ts';
+import type { AndroidPlaybackState, AndroidTrack } from './android.ts';
+import { resumePoint } from './driveSync.ts';
+import { getPreferences } from './preferences.ts';
 import { recordPodcastPlay } from './subscriptionSort.ts';
-import { removeQueuedEpisode } from './playbackQueue.ts';
+import { orderedQueue, removeQueuedEpisode } from './playbackQueue.ts';
+
+export function androidPlaybackTrack(state: AppState, episode: Episode,
+  time = state.playbackProgress[episode.audioUrl]?.currentTime ?? 0): AndroidTrack {
+  const podcast = state.subscriptions.find(p => p.feedUrl === episode.podcastId);
+  return { episode, time, podcastTitle: podcast?.title, artworkUrl: podcast?.artworkUrl };
+}
+
+export function androidPlaybackQueue(state: AppState) {
+  return orderedQueue(state.queue).map(episode => androidPlaybackTrack(state, episode));
+}
+
+export function androidPlaybackOpen(state: AppState) {
+  const point = resumePoint(state);
+  const { skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads } = getPreferences(state);
+  return {
+    action: 'open' as const,
+    track: point ? androidPlaybackTrack(state, point.episode, point.time) : undefined,
+    updated: point ? state.playbackProgress[point.episode.audioUrl]?.lastUpdated : undefined,
+    queue: androidPlaybackQueue(state),
+    skipBackwardSeconds,
+    skipForwardSeconds,
+    autoRemoveFinishedDownloads,
+  };
+}
 
 export function applyAndroidPlayback(state: AppState, playback: AndroidPlaybackState): AppState {
   if (!playback.changes.length) return state;

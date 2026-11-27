@@ -18,7 +18,7 @@ export function resumePoint(state: AppState): ResumePoint | null {
 }
 
 interface Events {
-  state: (state: AppState) => void;
+  state: (state: AppState, ready: boolean) => void;
   status: (status: SyncStatus) => void;
   remote: (point: ResumePoint | null) => void;
   expired: () => void;
@@ -26,6 +26,12 @@ interface Events {
 
 type Pull = 'event' | 'periodic';
 type Pending = Profile['pending'][number];
+
+function isDriveReady(profile: Profile) {
+  // Older versions only recorded a successful pull timestamp.
+  return profile.seeded && !!profile.feed && profile.feed.scanPage === undefined
+    && (profile.initialPullComplete ?? profile.lastPull !== undefined);
+}
 
 export class DriveSync {
   private id: string;
@@ -48,6 +54,7 @@ export class DriveSync {
   private retryDelay = 2000;
   private retryAt = 0;
   private owner = crypto.randomUUID();
+  private ready = false;
   private point: ResumePoint | null = null;
   private channel?: BroadcastChannel;
 
@@ -73,10 +80,17 @@ export class DriveSync {
   }
 
   async edit(update: StateUpdate, urgent = false, routine = false) {
-    const profile = await this.store(this.id, p => recordEdit(p, update, this.device, urgent, Date.now(), routine));
-    if (this.stopped) return;
+    if (this.stopped) return false;
+    let saved = false;
+    const profile = await this.store(this.id, p => {
+      if (!isDriveReady(p)) return;
+      saved = true;
+      return recordEdit(p, update, this.device, urgent, Date.now(), routine);
+    });
+    if (!saved) return false;
     this.publish(profile);
     if (profile.pending.length) this.schedule();
+    return true;
   }
 
   setEnvironment(network: SyncNetwork, visible: boolean, playing: boolean) {
@@ -165,14 +179,18 @@ export class DriveSync {
   private publish(profile: Profile, remote = false) {
     if (this.stopped) return;
     const previous = this.point;
+    const wasReady = this.ready;
+    this.ready = isDriveReady(profile);
     this.point = resumePoint(profile.state);
-    this.events.state(profile.state);
-    if (remote && (previous?.episode.audioUrl !== this.point?.episode.audioUrl || previous?.time !== this.point?.time)) {
+    this.events.state(profile.state, this.ready);
+    if (remote && wasReady && this.ready
+      && (previous?.episode.audioUrl !== this.point?.episode.audioUrl || previous?.time !== this.point?.time)) {
       this.events.remote(this.point);
     }
   }
 
   private nextUpload(profile: Profile, now: number) {
+    if (!isDriveReady(profile)) return;
     return profile.pending.find(entry => entry.urgent) ?? profile.pending.find(entry =>
       entry.due === undefined || (this.visible && (this.playing || this.catchUp) && entry.due <= now));
   }
@@ -188,7 +206,7 @@ export class DriveSync {
       while (this.online) {
         const pull = this.pull;
         this.pull = undefined;
-        if (pull || !profile.feed || profile.feed.scanPage !== undefined) {
+        if (pull || !isDriveReady(profile)) {
           this.events.status('Syncing');
           this.pulling = true;
           try {
@@ -207,7 +225,11 @@ export class DriveSync {
             this.pulling = false;
           }
           profile = await this.store(this.id);
-          if (!profile.feed || profile.feed.scanPage !== undefined || !this.online) break;
+          if (!isDriveReady(profile)) {
+            this.pull ??= 'event';
+            break;
+          }
+          if (!this.online) break;
         }
 
         if (!this.nextUpload(profile, Date.now())) break;
@@ -216,13 +238,13 @@ export class DriveSync {
         profile = await this.uploadNext(token);
         if (nextWake !== Infinity && this.pull) break;
       }
-      if (this.visible && (this.playing || this.catchUp)) {
+      if (isDriveReady(profile) && this.visible && (this.playing || this.catchUp)) {
         for (const entry of profile.pending) {
           if (entry.due !== undefined) nextWake = Math.min(nextWake, entry.due);
         }
       }
       if (!profile.pending.some(entry => entry.due !== undefined)) this.catchUp = false;
-      if (this.online) this.events.status(profile.pending.length ? 'Saved on this device' : 'Synced');
+      if (this.online && isDriveReady(profile)) this.events.status(profile.pending.length ? 'Saved on this device' : 'Synced');
       this.retryAt = 0;
       this.retryDelay = 2000;
     } catch (error) {
@@ -291,7 +313,7 @@ export class DriveSync {
         deferUntil = p.pullRetryAt;
         return;
       }
-      if (p.lastPull !== undefined && now - p.lastPull < (trigger === 'periodic' ? pollInterval : eventOverlap)) {
+      if (isDriveReady(p) && p.lastPull !== undefined && now - p.lastPull < (trigger === 'periodic' ? pollInterval : eventOverlap)) {
         if (trigger === 'periodic') deferUntil = p.lastPull + pollInterval;
         return;
       }
@@ -302,7 +324,7 @@ export class DriveSync {
       // Another tab may have already applied the latest batches.
       this.publish(profile, true);
       // Bootstrap must finish before any newly queued changes are uploaded.
-      return deferUntil || (!profile.feed || profile.feed.scanPage !== undefined ? now + eventOverlap : 0);
+      return deferUntil || (!isDriveReady(profile) ? now + eventOverlap : 0);
     }
 
     let retryAt: number | undefined;
@@ -348,15 +370,23 @@ export class DriveSync {
             if (profile.pullLease?.owner !== this.owner) return 0;
           }
         }
+        if (!this.online) break;
+        let becameReady = false;
         profile = await this.store(this.id, p => {
-          if (p.pullLease?.owner !== this.owner) return;
+          if (p.pullLease?.owner !== this.owner || !this.online) return;
           for (const batch of batches) applyBatch(p, batch);
-          p.feed = { token: page.nextToken, scanPage: page.scanPage };
           // Compact checkpoints already queued by older versions of the app.
           if (scan && page.scanPage === undefined) coalescePlaybackCheckpoints(p);
+          becameReady = !page.more && !isDriveReady(p);
+          p.feed = { token: page.nextToken, scanPage: page.scanPage };
+          if (!page.more) {
+            // Commit readiness with the terminal cursor, including an empty terminal page.
+            p.initialPullComplete = true;
+            p.lastPull = now;
+          }
         });
         this.publish(profile, true);
-        if (batches.length && !this.stopped) this.channel?.postMessage('pull');
+        if ((batches.length || becameReady) && !this.stopped) this.channel?.postMessage('pull');
         if (!page.more || profile.pullLease?.owner !== this.owner) break;
       }
     } catch (error) {
@@ -369,7 +399,6 @@ export class DriveSync {
         if (p.pullLease?.owner !== this.owner) return;
         p.pullLease = undefined;
         p.pullRetryAt = retryAt;
-        if (!retryAt && this.online) p.lastPull = now;
       });
     }
     return 0;

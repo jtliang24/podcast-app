@@ -129,7 +129,9 @@ export function useDownloadPolicy({ connection, ready, queue, preferences, stora
   }, []);
 
   useEffect(() => { attempted.current.clear(); }, [connection]);
-  useEffect(() => { forgetUnqueuedCompletions(queue); }, [queue, finishedIds, forgetUnqueuedCompletions]);
+  useEffect(() => {
+    if (ready) forgetUnqueuedCompletions(queue);
+  }, [ready, queue, finishedIds, forgetUnqueuedCompletions]);
 
   const requestDownload = useCallback((episode: Episode) => {
     setPending(current => current ?? { episode, automatic: false });

@@ -16,7 +16,7 @@ export interface UsePodcastPlayerProps {
   autoRemoveFinishedDownloads: boolean;
   finishDownload: (id: string) => void;
   refreshDownloads: () => Promise<void>;
-  updateState: (update: StateUpdate, urgent?: boolean, routine?: boolean) => Promise<void | boolean>;
+  updateState: (update: StateUpdate, urgent?: boolean, routine?: boolean) => Promise<boolean>;
   downloadedEpisodes: Episode[];
   downloadsReady: boolean;
   remoteSession: ResumePoint | null;
@@ -81,17 +81,17 @@ export function usePodcastPlayer({
 
   const requestPlay = useCallback(() => {
     const item = selected.current;
-    if (!item || item.ending) return;
+    if (!ready || !item || item.ending) return;
     item.autoplay = true;
     if (!item.source) return;
     void audioRef.current?.play().catch(() => {
       if (item === selected.current && item.autoplay) setPlaybackError(true);
     });
-  }, []);
+  }, [ready]);
 
   const select = useCallback((episode: Episode, time: number, autoplay: boolean) => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!ready || !audio) return;
     const old = selected.current;
     if (old?.started && old.episode.audioUrl !== episode.audioUrl) checkpoint(true);
     if (old) old.started = false;
@@ -120,7 +120,7 @@ export function usePodcastPlayer({
     } else {
       attach(null);
     }
-  }, [checkpoint, downloadsReady, downloadedEpisodes, requestPlay]);
+  }, [ready, checkpoint, downloadsReady, downloadedEpisodes, requestPlay]);
 
   // Initialize from state when it loads
   useEffect(() => {
@@ -187,14 +187,15 @@ export function usePodcastPlayer({
   }, [playbackError, requestPlay, retry]);
 
   const togglePlay = useCallback(() => {
+    if (!ready) return;
     if (audioRef.current?.paused) play();
     else pause();
-  }, [play, pause]);
+  }, [ready, play, pause]);
 
   const seek = useCallback((time: number) => {
     const audio = audioRef.current;
     const item = selected.current;
-    if (!audio || !item || !Number.isFinite(time)) return;
+    if (!ready || !audio || !item || !Number.isFinite(time)) return;
     const length = item.positioned && Number.isFinite(audio.duration) ? audio.duration : item.episode.duration;
     const target = Math.max(0, length > 0 ? Math.min(time, length) : time);
     setRemoteOffer(null);
@@ -202,7 +203,7 @@ export function usePodcastPlayer({
     // A seek during source loading is applied again when metadata becomes available.
     setCurrentTime(target);
     checkpoint(true, { time: target });
-  }, [checkpoint]);
+  }, [ready, checkpoint]);
   const skip = useCallback((seconds: number) => {
     const item = selected.current;
     const time = item?.positioned ? audioRef.current?.currentTime : item?.time;
@@ -215,7 +216,7 @@ export function usePodcastPlayer({
   }, [select, state.playbackProgress, togglePlay]);
 
   const continueListening = () => {
-    if (!offer) return;
+    if (!ready || !offer) return;
     setRemoteOffer(null);
     const item = selected.current;
     if (item?.positioned && item.episode.audioUrl === offer.episode.audioUrl && !playbackError) {
@@ -257,7 +258,7 @@ export function usePodcastPlayer({
 
   // Media Session API: Action Handlers & Playback State
   useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
+    if (!ready || !('mediaSession' in navigator)) return;
     const media = navigator.mediaSession;
     media.playbackState = isPlaying ? 'playing' : 'paused';
     const actions: [MediaSessionAction, MediaSessionActionHandler][] = [
@@ -274,7 +275,7 @@ export function usePodcastPlayer({
         try { media.setActionHandler(action, null); } catch { /* Unsupported action. */ }
       }
     };
-  }, [isPlaying, play, pause, skip, seek, skipBackwardSeconds, skipForwardSeconds]);
+  }, [ready, isPlaying, play, pause, skip, seek, skipBackwardSeconds, skipForwardSeconds]);
 
   const handleEpisodeEnded = async () => {
     const audio = audioRef.current;
@@ -329,7 +330,7 @@ export function usePodcastPlayer({
 
   return {
     currentEpisode, playingPodcast, isPlaying, currentTime, duration, audioRef, offer, hasRemoteOffer: !!remoteOffer, continueListening,
-    playbackReady: true,
+    playbackReady: ready,
     playbackError, retry, togglePlay, skip, seek, formatTime, playEpisode,
     audioEvents: { onLoadedMetadata: onMetadata, onPlaying, onPause, onTimeUpdate, onEnded: handleEpisodeEnded,
       onWaiting: () => setIsPlaying(false), onEmptied: () => setIsPlaying(false), onError },

@@ -15,6 +15,7 @@ type StorageMode = 'file-system-access' | 'opfs' | 'google-drive' | 'android';
 
 const DB_NAME = 'PodcastFileDB';
 const STORE_NAME = 'handles';
+const driveCacheError = 'Could not open the saved Drive library on this device.';
 
 function getDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -75,7 +76,9 @@ const saveState = async (handle: FileSystemFileHandle, newState: AppState) => {
 
 export function useFileSystem(network: SyncNetwork) {
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
-  const [state, setState] = useState<AppState>(INITIAL_STATE);
+  const [{ state, readyDriveId }, setLibrary] = useState<{ state: AppState; readyDriveId: string | null }>({
+    state: INITIAL_STATE, readyDriveId: null,
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [storageMode, setStorageMode] = useState<StorageMode | null>(() => localStorage.getItem('storageMode') as StorageMode | null);
   const [driveFileId, setDriveFileId] = useState(() => localStorage.getItem('driveFileId'));
@@ -104,9 +107,9 @@ export function useFileSystem(network: SyncNetwork) {
 
   // Keep state in a ref to always have the latest version for functional updates and I/O
   const stateRef = useRef<AppState>(state);
-  const publish = useCallback((next: AppState) => {
-    stateRef.current = next;
-    setState(next);
+  const publish = useCallback((state: AppState, readyDriveId: string | null = null) => {
+    stateRef.current = state;
+    setLibrary({ state, readyDriveId });
   }, []);
 
   // Persist storage settings to localStorage
@@ -150,7 +153,11 @@ export function useFileSystem(network: SyncNetwork) {
       localStorage.setItem('driveDeviceId', device);
     }
     const engine = new DriveSync(driveFileId, driveToken, device, {
-      state: publish, remote: setRemoteSession, status: setSyncStatus,
+      state: (state, ready) => {
+        publish(state, ready ? driveFileId : null);
+        setStorageError(current => current === driveCacheError ? null : current);
+      },
+      remote: setRemoteSession, status: setSyncStatus,
       expired: () => {
         localStorage.removeItem('driveAccessToken');
         if (isAndroid && driveToken) void AndroidDrive.clearToken({ token: driveToken }).catch(() => {});
@@ -159,7 +166,7 @@ export function useFileSystem(network: SyncNetwork) {
     });
     sync.current = engine;
     updateSyncEnvironment();
-    engine.restore().catch(() => setStorageError('Could not open the saved Drive library on this device.'))
+    engine.restore().catch(() => { if (sync.current === engine) setStorageError(driveCacheError); })
       .finally(() => { if (sync.current === engine) setIsLoading(false); });
     const foreground = () => { if (document.visibilityState === 'visible') engine.refresh(); };
     window.addEventListener('focus', foreground);
@@ -316,14 +323,14 @@ export function useFileSystem(network: SyncNetwork) {
     if (storageMode === 'google-drive') {
       if (!sync.current) return false;
       try {
-        await sync.current.edit(update, urgent, routine);
-        setStorageError(null);
+        const saved = await sync.current.edit(update, urgent, routine);
+        if (saved) setStorageError(null);
+        return saved;
       } catch (error) {
         setStorageError('Could not save this change on this device.');
         console.error(error);
         return false;
       }
-      return;
     }
     const next = typeof update === 'function' ? update(stateRef.current) : update;
     // Immediate state update for UI responsiveness
@@ -341,6 +348,7 @@ export function useFileSystem(network: SyncNetwork) {
     writes.current = write.catch(() => {});
     try {
       await write;
+      return true;
     } catch {
       setStorageError('Could not save this change on this device.');
       return false;
@@ -411,6 +419,7 @@ export function useFileSystem(network: SyncNetwork) {
     importState,
     connectDrive,
     driveFileId,
+    driveReady: driveFileId !== null && readyDriveId === driveFileId,
     syncStatus,
     refreshDrive,
     setSyncPlayback,

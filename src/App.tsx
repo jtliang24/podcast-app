@@ -61,6 +61,7 @@ function Library({ storage, profile, downloads, connection }: {
     importState,
     connectDrive,
     driveFileId,
+    driveReady,
     syncStatus,
     storageError,
     remoteSession,
@@ -184,7 +185,8 @@ function Library({ storage, profile, downloads, connection }: {
   const [importingStatus, setImportingStatus] = useState<string | null>(null);
   const preferences = getPreferences(state);
   const { skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads } = preferences;
-  const ready = !isLoading && !setupToken && (!isFileSystemAccessSupported || !!fileHandle || storageMode === 'google-drive');
+  const ready = !isLoading && !setupToken && (storageMode === 'google-drive'
+    ? driveReady : !isFileSystemAccessSupported || !!fileHandle);
 
   const handleDeleteDownload = useCallback(async (episodeId: string) => {
     try {
@@ -262,6 +264,7 @@ function Library({ storage, profile, downloads, connection }: {
 
   // Keyboard Shortcuts
   useEffect(() => {
+    if (!ready) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || !(e.target instanceof Element)) return;
       if (e.target.closest('input, select, textarea, [contenteditable], dialog:not(#now-playing)')) return;
@@ -277,7 +280,7 @@ function Library({ storage, profile, downloads, connection }: {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, skip, skipBackwardSeconds, skipForwardSeconds]);
+  }, [ready, togglePlay, skip, skipBackwardSeconds, skipForwardSeconds]);
 
   // Search and Subscription Handlers
   const handleSearch = async (e: React.FormEvent) => {
@@ -483,7 +486,7 @@ function Library({ storage, profile, downloads, connection }: {
 
   // New Releases Logic
   const loadNewReleases = useCallback(async () => {
-    if (!navigator.onLine || state.subscriptions.length === 0 || releasesRequestInFlight.current) return;
+    if (!ready || !navigator.onLine || state.subscriptions.length === 0 || releasesRequestInFlight.current) return;
     attemptedReleaseDateBackfill.current = true;
     releasesRequestInFlight.current = true;
     setIsRefreshingNewReleases(true);
@@ -536,7 +539,7 @@ function Library({ storage, profile, downloads, connection }: {
       releasesRequestInFlight.current = false;
       setIsRefreshingNewReleases(false);
     }
-  }, [state.subscriptions, updateState]);
+  }, [ready, state.subscriptions, updateState]);
 
   const needsReleaseDates = state.subscriptions.some(podcast => state.podcastReleaseDates?.[podcast.feedUrl] === undefined);
   useEffect(() => {
@@ -545,13 +548,13 @@ function Library({ storage, profile, downloads, connection }: {
     const shouldRefresh = (needsReleaseDates && !attemptedReleaseDateBackfill.current)
       || !state.lastRefresh || (now - state.lastRefresh > ONE_HOUR);
     
-    if (state.subscriptions.length > 0 && shouldRefresh && storageMode) {
+    if (ready && state.subscriptions.length > 0 && shouldRefresh && storageMode) {
       const timer = setTimeout(() => {
         loadNewReleases();
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [state.subscriptions.length, state.lastRefresh, needsReleaseDates, storageMode, loadNewReleases]);
+  }, [ready, state.subscriptions.length, state.lastRefresh, needsReleaseDates, storageMode, loadNewReleases]);
 
   useEffect(() => {
     if (viewMode === 'new-releases' && state.newReleases.length === 0 && state.subscriptions.length > 0) {
@@ -663,6 +666,29 @@ function Library({ storage, profile, downloads, connection }: {
           </label>
         </div>
         <div className="mt-6"><ReportBugButton /></div>
+      </div>
+    );
+  }
+
+  if (storageMode === 'google-drive' && !driveReady) {
+    const offline = syncNetwork(connection) === 'offline';
+    const reconnect = syncStatus === 'Reconnect Google Drive';
+    const syncing = !offline && (syncStatus === 'Syncing' || !!driveLoadingMessage);
+    const message = driveLoadingMessage || storageError || (offline
+      ? 'Connect to the internet to finish syncing your library.'
+      : reconnect ? 'Reconnect Google Drive to finish syncing your library.'
+      : syncing ? 'Restoring your library and playback from Google Drive.'
+      : 'The initial sync is paused. Retry to continue.');
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center gap-4 p-4 text-center text-white">
+        {syncing && <Loader2 aria-hidden="true" className="animate-spin text-blue-500" size={48} />}
+        <h1 className="text-xl font-bold">Syncing your library</h1>
+        <p role="status" className="max-w-sm text-slate-300">{message}</p>
+        {!offline && !syncing && (
+          <button className="rounded-lg bg-blue-600 px-4 py-2 font-semibold" onClick={reconnect ? () => loginWithGoogle() : refreshDrive}>
+            {reconnect ? 'Reconnect Google Drive' : 'Retry sync'}
+          </button>
+        )}
       </div>
     );
   }
