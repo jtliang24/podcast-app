@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  activeParagraph, decodeEntities, findMatches, groupSegments, parseHtmlTranscript, parseTimestamp, parseTranscript,
-  pickTranscript, transcriptFormat, transcriptParagraphs, TRANSCRIPT_HTML_CONFIG,
+  activeParagraph, decodeEntities, findMatches, groupSegments, MAX_CUE_LINE_LENGTH, parseHtmlTranscript, parseTimestamp,
+  parseTranscript, pickTranscript, transcriptFormat, transcriptParagraphs, TRANSCRIPT_HTML_CONFIG,
 } from '../src/services/transcripts.ts';
 
 const ref = (type, language) => ({ url: `https://t.example/${type.replace(/\W/g, '')}-${language ?? 'none'}`, type, ...(language ? { language } : {}) });
@@ -198,6 +198,44 @@ test('cues are grouped by speaker, pauses under 2 s and about 30 s per paragraph
   ]);
   assert.deepEqual(cues, copy, 'the input is not modified');
   assert.deepEqual(groupSegments([{ text: 'a' }, { text: 'b' }]), [{ text: 'a' }, { text: 'b' }]);
+});
+
+/** Runs `parse` and checks it finished within `ms` (generous for slow machines; the old regexes took seconds). */
+function assertFast(parse, ms = 500) {
+  const started = performance.now();
+  const result = parse();
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < ms, `took ${Math.round(elapsed)} ms`);
+  return result;
+}
+
+test('a 1 MB cue line with unclosed tags and overrides parses in linear time', () => {
+  const line = `<v Bob>Hello <b>world</b> {\\an8}${'<v '.repeat(150_000)}${'<'.repeat(300_000)}${'{\\'.repeat(150_000)}`;
+  assert.ok(line.length >= 1_000_000);
+  const cue = body => `WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n${body}\n`;
+  for (const type of ['text/vtt', 'application/srt']) {
+    const [segment, ...rest] = assertFast(() => parseTranscript(cue(line), type));
+    assert.equal(rest.length, 0);
+    assert.equal(segment.text.length <= MAX_CUE_LINE_LENGTH, true, 'long lines are cut off');
+    assert.ok(segment.text.startsWith('Hello world <v <v'));
+    assert.equal(segment.speaker, type === 'text/vtt' ? 'Bob' : undefined);
+  }
+  assertFast(() => parseTranscript(cue(`<v${' '.repeat(1_000_000)}`), 'text/vtt'));
+  assertFast(() => parseTranscript(cue(`{\\${'x'.repeat(1_000_000)}`), 'application/srt'));
+});
+
+test('cue tags and overrides are only removed when closed', () => {
+  const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<b<v Ann>Hi</v> {\\an8}{\\i1 and 1 < 2';
+  assert.deepEqual(parseTranscript(vtt, 'text/vtt'), [{ start: 1, end: 2, speaker: 'Ann', text: 'Hi {\\i1 and 1 < 2' }]);
+  assert.deepEqual(parseTranscript(vtt.replace('WEBVTT\n\n', ''), 'application/srt'), [{ start: 1, end: 2, text: 'Hi {\\i1 and 1 < 2' }]);
+});
+
+test('HTML with many unclosed tags and comments parses in linear time', () => {
+  const html = `<p>Start</p>${'<a'.repeat(250_000)}${'<!--'.repeat(125_000)}`;
+  const segments = assertFast(() => parseHtmlTranscript(html, value => value));
+  assert.equal(segments[0].text, 'Start');
+  assert.ok(segments[1].text.startsWith('<a<a'));
+  assert.deepEqual(parseHtmlTranscript('<p>One<!-- hidden --></p><p>a < b <!-- open', value => value), [{ text: 'One' }, { text: 'a < b <!-- open' }]);
 });
 
 test('caption formats are grouped, HTML and plain text are not', () => {

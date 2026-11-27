@@ -97,11 +97,49 @@ function parseDatetime(value: string): number | undefined {
 
 const byStart = (segments: Segment[]) => segments.sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
 
+/** Cue lines longer than this are cut off: no real caption line is, and it bounds the work per line. */
+export const MAX_CUE_LINE_LENGTH = 10_000;
+
+/**
+ * Removes every `open`…`close` span (as `/<[^>]*>/g` does for tags) in linear time; a regex with `[^>]*`
+ * backtracks quadratically on a long line with many `<` and no `>`. An `open` with no `close` after it stays.
+ */
+function stripDelimited(text: string, open: string, close: string): string {
+  let result = '';
+  let position = 0;
+  for (let start = text.indexOf(open); start >= 0; start = text.indexOf(open, position)) {
+    const end = text.indexOf(close, start + open.length);
+    // No `close` after this `open` means none after a later one either.
+    if (end < 0) break;
+    result += text.slice(position, start);
+    position = end + close.length;
+  }
+  return result + text.slice(position);
+}
+
+/** A `<v Speaker>` or `<v.class Speaker>` tag, matched at one `<`; group 1 is the speaker. */
+const VOICE_TAG = /<v(?:\.[^\s>]*)?(?:\s([^>]*))?>/y;
+
+/**
+ * The speaker named by the first `<v>` tag in a cue line, or `undefined` when there is none. `VOICE_TAG` is
+ * only tried at a `<` with a `>` after it, where it matches or fails right away, so this takes linear time.
+ */
+function cueVoice(line: string): string | undefined {
+  const last = line.lastIndexOf('>');
+  for (let start = line.indexOf('<'); start >= 0 && start < last; start = line.indexOf('<', start + 1)) {
+    VOICE_TAG.lastIndex = start;
+    const voice = VOICE_TAG.exec(line);
+    if (voice) return voice[1] ?? '';
+  }
+  return undefined;
+}
+
 /**
  * WebVTT (`vtt`) or SRT cues. Blocks are separated by blank lines; a block is a cue when it has a
  * `start --> end` line, so the WebVTT header, `NOTE`, `STYLE` and `REGION` blocks, cue ids, SRT counters and
  * cue settings are skipped. `<v Speaker>` (also `<v.class Speaker>`) sets the speaker; other tags, SRT
  * `{\an8}` overrides and blank cues are removed. A cue with lines from several voices becomes one segment each.
+ * Lines are cut off at `MAX_CUE_LINE_LENGTH`.
  */
 function parseCues(text: string, vtt: boolean): Segment[] {
   const segments: Segment[] = [];
@@ -117,10 +155,11 @@ function parseCues(text: string, vtt: boolean): Segment[] {
     if (start === undefined || end === undefined) continue;
     let speaker: string | undefined;
     let current: Segment | undefined;
-    for (const line of lines.slice(timing + 1)) {
-      const voice = vtt ? /<v(?:\.[^\s>]*)?(?:\s+([^>]*))?>/.exec(line) : null;
-      if (voice) speaker = collapse(decodeEntities(voice[1] ?? '')) || undefined;
-      const words = collapse(decodeEntities(line.replace(/<[^>]*>/g, '').replace(/\{\\[^}]*\}/g, '')));
+    for (const fullLine of lines.slice(timing + 1)) {
+      const line = fullLine.slice(0, MAX_CUE_LINE_LENGTH);
+      const voice = vtt ? cueVoice(line) : undefined;
+      if (voice !== undefined) speaker = collapse(decodeEntities(voice)) || undefined;
+      const words = collapse(decodeEntities(stripDelimited(stripDelimited(line, '<', '>'), '{\\', '}')));
       if (!words) continue;
       if (current && current.speaker === speaker) current.text += ` ${words}`;
       else {
@@ -161,6 +200,58 @@ function parseJsonTranscript(text: string): Segment[] {
   return byStart(segments);
 }
 
+/** A piece of HTML: text (a `<` that starts no tag or comment is text too), or a start or end tag. */
+type HtmlToken = { text: string; tag?: undefined } | { text?: undefined; tag: string; closing: boolean; attributes: string };
+
+const isTagNameStart = (char: string | undefined) => !!char && /[a-z]/i.test(char);
+const isTagNameChar = (char: string) => /[\w-]/.test(char);
+
+/**
+ * Splits HTML into text and tags (`<name attributes>` or `</name>`), dropping comments. This is what
+ * `/<!--[\s\S]*?-->|<(\/?)([a-z][\w-]*)([^>]*)>|([^<]+)|</gi` matches, but in linear time: that regex scans to
+ * the end of the input at every `<` when there is no `>` (or `-->`) after it.
+ */
+function* htmlTokens(html: string): Generator<HtmlToken> {
+  // The first `>` and `-->` at or after the last search, `-1` when there is none (and so none later either).
+  let tagEnd = -2;
+  let commentEnd = -2;
+  const findTagEnd = (from: number) => {
+    if (tagEnd !== -1 && tagEnd < from) tagEnd = html.indexOf('>', from);
+    return tagEnd;
+  };
+  const findCommentEnd = (from: number) => {
+    if (commentEnd !== -1 && commentEnd < from) commentEnd = html.indexOf('-->', from);
+    return commentEnd;
+  };
+  // Text runs up to the next tag or comment; a `<` that starts neither stays in it.
+  let textStart = 0;
+  for (let open = html.indexOf('<'); open >= 0; open = html.indexOf('<', open + 1)) {
+    let end = -1;
+    let tag: HtmlToken | undefined;
+    if (html.startsWith('<!--', open)) {
+      const commentClose = findCommentEnd(open + 4);
+      if (commentClose >= 0) end = commentClose + 3;
+    }
+    const closing = html[open + 1] === '/';
+    const nameStart = closing ? open + 2 : open + 1;
+    if (end < 0 && isTagNameStart(html[nameStart])) {
+      let nameEnd = nameStart + 1;
+      while (nameEnd < html.length && isTagNameChar(html[nameEnd])) nameEnd++;
+      const tagClose = findTagEnd(nameEnd);
+      if (tagClose >= 0) {
+        tag = { tag: html.slice(nameStart, nameEnd), closing, attributes: html.slice(nameEnd, tagClose) };
+        end = tagClose + 1;
+      }
+    }
+    if (end < 0) continue;
+    if (open > textStart) yield { text: html.slice(textStart, open) };
+    if (tag) yield tag;
+    textStart = end;
+    open = end - 1;
+  }
+  if (textStart < html.length) yield { text: html.slice(textStart) };
+}
+
 /** Elements whose content is never transcript text, should any survive sanitizing. */
 const DROPPED_CONTENT = new Set(['script', 'style', 'template', 'noscript', 'iframe', 'object', 'svg', 'math', 'textarea', 'title', 'head']);
 
@@ -190,23 +281,21 @@ export function parseHtmlTranscript(html: string, sanitize: HtmlSanitizer): Segm
     start = undefined;
   };
 
-  const tokens = /<!--[\s\S]*?-->|<(\/?)([a-z][\w-]*)([^>]*)>|([^<]+)|</gi;
-  for (let match = tokens.exec(clean); match; match = tokens.exec(clean)) {
-    const [token, closing, rawTag, attributes, rawText] = match;
-    const tag = rawTag?.toLowerCase();
+  for (const token of htmlTokens(clean)) {
     if (dropped) {
-      if (tag === dropped.tag) dropped.depth += closing ? -1 : 1;
+      if (token.tag !== undefined && token.tag.toLowerCase() === dropped.tag) dropped.depth += token.closing ? -1 : 1;
       if (dropped.depth === 0) dropped = undefined;
       continue;
     }
-    if (rawText !== undefined || token === '<') {
-      const decoded = rawText === undefined ? '<' : decodeEntities(rawText);
+    if (token.text !== undefined) {
+      const decoded = decodeEntities(token.text);
       if (inside) captured += decoded;
       else text += decoded;
       if (decoded.trim()) lastWasBreak = false;
       continue;
     }
-    if (!tag) continue; // A comment.
+    const tag = token.tag.toLowerCase();
+    const { closing, attributes } = token;
     if (DROPPED_CONTENT.has(tag) && !closing && !attributes.trim().endsWith('/')) {
       dropped = { tag, depth: 1 };
     } else if (tag === 'p') {
