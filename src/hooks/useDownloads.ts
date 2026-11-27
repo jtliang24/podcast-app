@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { deleteDownload, downloadEpisode, getAllDownloadedEpisodes } from '../services/storageService';
 import { isAndroid } from '../services/android';
+import { pinExtras, unpinExtras, unpinExtrasExcept } from '../services/extrasCache';
 import type { DownloadConnection } from '../services/android';
 import type { Preferences } from '../services/preferences';
 import type { Episode } from '../types';
@@ -13,12 +14,18 @@ export function useDownloadStorage() {
   const active = useRef(new Map<string, { discard: boolean }>());
   const removals = useRef(new Map<string, Promise<void>>());
   const latestRead = useRef(0);
+  const releasedStalePins = useRef(false);
 
   const refreshDownloads = useCallback(async () => {
     const read = ++latestRead.current;
     try {
       const episodes = await getAllDownloadedEpisodes();
       if (read === latestRead.current) setDownloadedEpisodes(episodes);
+      if (!releasedStalePins.current) {
+        // Covers downloads removed while this page wasn't listening, e.g. native cleanup after playback.
+        releasedStalePins.current = true;
+        void unpinExtrasExcept(episodes.map(episode => episode.id));
+      }
     } catch (error) {
       console.error(error);
     } finally {
@@ -35,6 +42,7 @@ export function useDownloadStorage() {
     const existing = removals.current.get(id);
     if (existing) return existing;
     const removal = deleteDownload(id).then(async () => {
+      void unpinExtras(id);
       if (!isAndroid) setDownloadedEpisodes(previous => previous.filter(episode => episode.id !== id));
       else if (refresh) await refreshDownloads();
     }).finally(() => { removals.current.delete(id); });
@@ -62,10 +70,13 @@ export function useDownloadStorage() {
 
   const finishDownload = useCallback((id: string) => {
     setFinishedIds(previous => previous.has(id) ? previous : new Set([...previous, id]));
-    if (isAndroid) return; // The playback service owns native cleanup.
     const attempt = active.current.get(id);
     if (attempt) attempt.discard = true;
-    else void removeFinished(id);
+    if (isAndroid) {
+      void unpinExtras(id);
+      return; // The playback service owns native cleanup.
+    }
+    if (!attempt) void removeFinished(id);
   }, [removeFinished]);
 
   const forgetUnqueuedCompletions = useCallback((queue: Episode[]) => {
@@ -85,9 +96,10 @@ export function useDownloadStorage() {
       await removals.current.get(episode.id)?.catch(() => {});
       await downloadEpisode(episode);
       if (isAndroid) await refreshDownloads();
-      else if (!attempt.discard || !await removeFinished(episode.id)) {
-        setDownloadedEpisodes(previous => [...previous.filter(item => item.id !== episode.id), episode]);
-      }
+      const kept = !attempt.discard || (!isAndroid && !await removeFinished(episode.id));
+      if (kept && !isAndroid) setDownloadedEpisodes(previous => [...previous.filter(item => item.id !== episode.id), episode]);
+      // Best effort: keep the chapters and a transcript with the audio for offline playback.
+      if (kept) void pinExtras(episode);
     } finally {
       active.current.delete(episode.id);
       setDownloadingIds(new Set(active.current.keys()));
