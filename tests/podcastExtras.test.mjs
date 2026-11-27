@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fetchPodcastFeed } from '../src/services/podcastService.ts';
-import { clearExtrasCache, resolveExtras } from '../src/services/episodeExtras.ts';
+import { clearExtrasCache, lookupExtras, resolveExtras } from '../src/services/episodeExtras.ts';
 
 const feedUrl = 'https://feed.example/show.rss';
 const feedXml = items => `<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0" xmlns:psc="http://podlove.org/simple-chapters"><channel><title>Show</title>${items}</channel></rss>`;
@@ -102,4 +102,23 @@ test('failed fetches are retried and missing episodes resolve to no extras', asy
   assert.deepEqual((await resolveExtras(oldEpisode, counting)).transcripts, []);
   await resolveExtras(oldEpisode, counting);
   assert.equal(calls, 1);
+});
+
+test('extras kept for a downloaded old episode are used before the feed, so they work offline', async t => {
+  clearExtrasCache();
+  const kept = { chaptersUrl: 'https://t.example/c.json', inlineChapters: undefined, transcripts: [{ url: 'https://t.example/one.vtt', type: 'text/vtt' }] };
+  const offline = t.mock.fn(async () => { throw new Error('offline'); });
+  const stored = t.mock.fn(async id => id === 'one' ? kept : undefined);
+  const resolved = await resolveExtras(oldEpisode, offline, stored);
+  assert.deepEqual(resolved.transcripts, kept.transcripts);
+  assert.equal(resolved.chaptersUrl, kept.chaptersUrl);
+  assert.equal(offline.mock.callCount(), 0);
+  assert.deepEqual(await lookupExtras(oldEpisode, offline, stored), kept);
+
+  assert.deepEqual((await resolveExtras({ ...oldEpisode, id: 'other' }, offline, stored)).transcripts, []);
+  assert.equal(offline.mock.callCount(), 1, 'without kept extras the feed is fetched');
+  assert.equal(await lookupExtras({ ...oldEpisode, id: 'other' }, offline, stored), undefined);
+  const broken = async () => { throw new Error('no IndexedDB'); };
+  const feed = async () => ({ podcast: {}, episodes: [{ ...oldEpisode, transcripts: kept.transcripts }] });
+  assert.deepEqual((await resolveExtras(oldEpisode, feed, broken)).transcripts, kept.transcripts);
 });

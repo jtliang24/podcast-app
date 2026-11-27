@@ -1,5 +1,5 @@
 import type { Episode } from '../types.ts';
-import { resolveExtras } from './episodeExtras.ts';
+import { lookupExtras, type EpisodeExtras } from './episodeExtras.ts';
 import { fetchRemoteText } from './podcastService.ts';
 import { isPrivateSubstackFeed } from './substackFeed.ts';
 import { pickTranscript, transcriptFormat } from './transcripts.ts';
@@ -14,7 +14,10 @@ const DB_NAME = 'podcast_episode_extras';
 const DB_VERSION = 1;
 /** Cached files (`ExtraFile`), keyed by URL. */
 const FILES_STORE = 'files';
-/** The URLs each downloaded episode pinned (`PinRecord`), keyed by episode id, so removal can unpin them. */
+/**
+ * The URLs each downloaded episode pinned (`PinRecord`), keyed by episode id, so removal can unpin them. It
+ * also keeps the extras of older episode copies, so they work offline without the feed.
+ */
 const PINS_STORE = 'pins';
 
 /** Unpinned files kept beyond this count are evicted. Pinned files are bounded by the downloads. */
@@ -41,6 +44,8 @@ export interface ExtraEntry {
 interface PinRecord {
   id: string;
   urls: string[];
+  /** The extras `resolveExtras` found for an episode copy that lacks them. */
+  extras?: EpisodeExtras;
 }
 
 export interface ExtraLoadOptions {
@@ -205,6 +210,13 @@ async function savePin(pin: PinRecord): Promise<void> {
   });
 }
 
+async function readPin(episodeId: string): Promise<PinRecord | undefined> {
+  return transact<PinRecord>([PINS_STORE], 'readonly', (transaction, result) => {
+    const request = transaction.objectStore(PINS_STORE).get(episodeId);
+    request.onsuccess = () => { result.value = request.result as PinRecord | undefined; };
+  });
+}
+
 async function removePin(episodeId: string): Promise<void> {
   await transact([FILES_STORE, PINS_STORE], 'readwrite', transaction => {
     const files = transaction.objectStore(FILES_STORE);
@@ -287,19 +299,33 @@ function serialize(episodeId: string, work: () => Promise<void>): Promise<void> 
 }
 
 /**
+ * The extras this device kept for a downloaded episode copy that lacks them, read by `resolveExtras` before
+ * it fetches the feed. Resolves to `undefined` when there are none or the cache is unavailable.
+ */
+export async function storedExtras(episodeId: string): Promise<EpisodeExtras | undefined> {
+  try {
+    return (await readPin(episodeId))?.extras;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Caches and pins a downloaded episode's chapters and preferred transcript so they work offline. Older
- * episode copies get their extras through `resolveExtras`.
+ * episode copies get their extras through `lookupExtras`, and those are kept with the pin so the episode
+ * finds its files offline too.
  */
 export function pinExtras(episode: Episode): Promise<void> {
   return serialize(episode.id, async () => {
-    const resolved = await resolveExtras(episode);
+    const extras = episode.transcripts === undefined ? await lookupExtras(episode) : undefined;
+    const resolved = extras ? { ...episode, ...extras } : episode;
     const language = typeof navigator === 'undefined' ? undefined : navigator.language;
     const wanted = preferredExtras(resolved, language);
-    if (!wanted.length) return;
+    if (!wanted.length && !extras) return;
     const privateSource = isPrivateExtraSource(episode.podcastId);
     const loaded = await Promise.all(wanted.map(({ url, type }) => loadExtraFile(url, { type, privateSource, pinned: true })));
     const urls = wanted.filter((_, index) => loaded[index] !== null).map(file => file.url);
-    if (urls.length) await savePin({ id: episode.id, urls });
+    if (urls.length || extras) await savePin({ id: episode.id, urls, extras });
   });
 }
 
