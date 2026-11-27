@@ -55,7 +55,13 @@ function publicSources(url: URL): { name: string, url: string, request?: Request
 }
 
 interface SourceOptions {
+  /** A private request on Android, whose failures are reported without the URL. */
   privateNative: boolean;
+  /**
+   * Asks Android's native HTTP for its private-feed mode, which only allows Substack feed paths and hosts and
+   * waits up to 30 s. Only private feeds use it; other private files are plain direct requests.
+   */
+  nativePrivateFeed: boolean;
   accept: string;
   /** Web requests only send an Accept header when the caller asked for one. */
   sendAccept: boolean;
@@ -82,7 +88,7 @@ async function loadFromSources<T>(
     const relay = source.url === substackFeedEndpoint;
     const timeout = setTimeout(() => controller.abort(), relay ? 30_000 : FEED_REQUEST_TIMEOUT_MS);
     try {
-      const native = isAndroid ? await AndroidHttp.get({ url: source.url, privateFeed: privateNative, accept: options.accept }) : null;
+      const native = isAndroid ? await AndroidHttp.get({ url: source.url, privateFeed: options.nativePrivateFeed, accept: options.accept }) : null;
       const request = options.sendAccept
         ? { ...source.request, headers: { Accept: options.accept, ...source.request?.headers } }
         : source.request;
@@ -114,8 +120,8 @@ async function loadFromSources<T>(
 
 /**
  * Fetches a remote text file (chapters, transcripts) the way feeds are fetched: the publisher first, then
- * public proxies on the web. `privateSource` limits the request to a direct fetch (or native HTTP on
- * Android) and never uses a proxy or relay. `accept` defaults to the feed types.
+ * public proxies on the web. `privateSource` limits the request to a direct HTTPS fetch (or plain native HTTP on
+ * Android, without the private-feed checks) and never uses a proxy or relay. `accept` defaults to the feed types.
  */
 export async function fetchRemoteText(
   url: string,
@@ -129,6 +135,7 @@ export async function fetchRemoteText(
     privateSource ? [{ name: 'Publisher', url: target.href }] : publicSources(target),
     {
       privateNative: isAndroid && privateSource,
+      nativePrivateFeed: false,
       accept: accept ?? FEED_ACCEPT,
       sendAccept: accept !== undefined,
       deniedMessage: 'Access to the private file was denied.',
@@ -146,8 +153,10 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
     throw new Error('Podcast feeds must use HTTP or HTTPS');
   }
 
+  const privateNative = isAndroid && isPrivateSubstackFeed(url);
   return loadFromSources(feedSources(url), {
-    privateNative: isAndroid && isPrivateSubstackFeed(url),
+    privateNative,
+    nativePrivateFeed: privateNative,
     accept: FEED_ACCEPT,
     sendAccept: false,
     deniedMessage: 'Substack denied access. Copy your current private podcast feed URL from your subscription settings and try again.',
