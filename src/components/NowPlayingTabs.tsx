@@ -8,7 +8,7 @@ export interface NowPlayingTab {
 }
 
 /**
- * The tabbed area under the Now Playing controls (chapters, later the transcript). Only tabs with content
+ * The tabbed area under the Now Playing controls (chapters, and the transcript on narrow screens). Only tabs with content
  * should be passed; with none, nothing is shown. Follows the WAI-ARIA tabs pattern: arrow keys, Home and End
  * move between tabs, and selection follows focus.
  */

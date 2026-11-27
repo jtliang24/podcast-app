@@ -1,11 +1,15 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { 
   Play, Pause, ArrowLeft,
-  ArrowDownToLine, Loader2, CheckCircle2, Clock, Calendar
+  ArrowDownToLine, Loader2, CheckCircle2, Clock, Calendar, FileText
 } from 'lucide-react';
 import type { Episode, Podcast, QueueEpisode } from '../types';
 import EpisodeQueueActions from './EpisodeQueueActions';
+import TranscriptPanel from './TranscriptPanel';
+import { useTranscript } from '../hooks/useTranscript';
+import { formatTime } from '../hooks/usePodcastPlayer';
+import { pickTranscript } from '../services/transcripts';
 
 interface EpisodeDescriptionViewProps {
   episode: Episode;
@@ -18,6 +22,13 @@ interface EpisodeDescriptionViewProps {
   onDownload: (e: Episode) => void;
   onDeleteDownload: (id: string) => void;
   downloadStatus: 'none' | 'downloading' | 'downloaded';
+}
+
+/** The transcript of an episode that isn't playing, as text to read (Now Playing shows the playing one in sync). */
+function EpisodeTranscript({ episode }: { episode: Episode }) {
+  const transcript = useTranscript(episode);
+  if (transcript.status === 'none') return <p className="text-sm text-slate-400">No transcript is available.</p>;
+  return <TranscriptPanel transcript={transcript} formatTime={formatTime} className="h-[70dvh]" />;
 }
 
 const EpisodeDescriptionView: React.FC<EpisodeDescriptionViewProps> = ({
@@ -37,6 +48,10 @@ const EpisodeDescriptionView: React.FC<EpisodeDescriptionViewProps> = ({
       'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
     ALLOWED_ATTR: ['href', 'src', 'alt', 'title'],
   }), [episode.description]);
+  // Which episode's transcript is open, so it closes when another episode is shown.
+  const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
+  const hasTranscript = !isCurrent && !!pickTranscript(episode.transcripts, navigator.language);
+  const showTranscript = hasTranscript && transcriptFor === episode.id;
   const dateStr = new Date(episode.pubDate).toLocaleDateString(undefined, {
     weekday: 'long',
     year: 'numeric',
@@ -139,7 +154,27 @@ const EpisodeDescriptionView: React.FC<EpisodeDescriptionViewProps> = ({
             <span className="hidden group-hover:inline">Delete Download</span>
           </button>
         )}
+
+        {hasTranscript && (
+          <button
+            type="button"
+            aria-expanded={showTranscript}
+            aria-controls="episode-transcript"
+            onClick={() => setTranscriptFor(showTranscript ? null : episode.id)}
+            className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-4 rounded-2xl font-bold flex items-center transition-all"
+          >
+            <FileText size={20} className="mr-2" aria-hidden="true" />
+            {showTranscript ? 'Hide transcript' : 'Read transcript'}
+          </button>
+        )}
       </div>
+
+      {showTranscript && (
+        <section id="episode-transcript" aria-labelledby="episode-transcript-heading" className="mb-12">
+          <h2 id="episode-transcript-heading" className="text-xl font-bold mb-4 text-slate-200">Transcript</h2>
+          <EpisodeTranscript episode={episode} />
+        </section>
+      )}
 
       <div className="prose prose-invert max-w-none">
         <h2 className="text-xl font-bold mb-4 text-slate-200">About this episode</h2>

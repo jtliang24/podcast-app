@@ -12,6 +12,9 @@ import { useChapters } from '../hooks/useChapters';
 import ChapterList from './ChapterList';
 import NowPlayingTabs from './NowPlayingTabs';
 import type { NowPlayingTab } from './NowPlayingTabs';
+import { useTranscript } from '../hooks/useTranscript';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import TranscriptPanel from './TranscriptPanel';
 
 interface PlaybackTimelineProps {
   currentTime: number;
@@ -123,11 +126,28 @@ export default function NowPlayingScreen({
   const seekRef = useRef(timeline.seek);
   seekRef.current = timeline.seek;
   const seekChapter = useCallback((time: number) => seekRef.current(time), []);
-  const tabs: NowPlayingTab[] = chapters.length ? [{
+  const transcript = useTranscript(episode);
+  // On wide screens the transcript is a side panel next to the player; otherwise it is a tab.
+  const wide = useMediaQuery('(min-width: 1024px)');
+  const transcriptPanel = (className: string) => transcript.status !== 'none' && (
+    <TranscriptPanel
+      key={episode ? `${episode.podcastId}\n${episode.id}` : ''}
+      transcript={transcript}
+      currentTime={timeline.currentTime}
+      seek={seekChapter}
+      formatTime={timeline.formatTime}
+      className={className}
+    />
+  );
+  const sideTranscript = wide ? transcriptPanel('h-full') : false;
+  const tabs: NowPlayingTab[] = [];
+  if (chapters.length) tabs.push({
     id: 'chapters',
     label: 'Chapters',
     panel: <ChapterList chapters={chapters} current={current} seek={seekChapter} formatTime={timeline.formatTime} />,
-  }] : [];
+  });
+  const tabTranscript = wide ? false : transcriptPanel('h-[65dvh]');
+  if (tabTranscript) tabs.push({ id: 'transcript', label: 'Transcript', panel: tabTranscript });
   return (
     <dialog
       ref={ref}
@@ -136,7 +156,7 @@ export default function NowPlayingScreen({
       className="now-playing-dialog m-0 h-full max-h-none w-full max-w-none overflow-y-auto overscroll-contain bg-slate-950 p-0 text-white"
     >
       <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950">
-        <div className="mx-auto flex max-w-5xl items-center gap-4 px-5 py-3 md:px-8">
+        <div className={`mx-auto flex items-center gap-4 px-5 py-3 md:px-8 ${sideTranscript ? 'max-w-7xl' : 'max-w-5xl'}`}>
           <form method="dialog">
             <button type="submit" aria-label="Close Now Playing" className="grid h-11 w-11 place-items-center rounded-full bg-slate-800 hover:bg-slate-700">
               <ChevronDown size={24} aria-hidden="true" />
@@ -147,82 +167,90 @@ export default function NowPlayingScreen({
       </header>
 
       {episode ? (
-        <div className="mx-auto flex max-w-5xl flex-col items-center gap-5 px-5 py-6 md:gap-7 md:px-8 md:py-8">
-          <div className="grid aspect-square w-[clamp(6rem,34dvh,20rem)] max-w-full place-items-center overflow-hidden rounded-2xl bg-slate-900 text-slate-600 shadow-xl">
-            {chapterArtwork ? (
-              <img src={chapterArtwork} referrerPolicy="no-referrer" onError={() => setBrokenArtwork(broken => new Set(broken).add(chapterArtwork))} className="h-full w-full object-cover" alt="" />
-            ) : podcast?.artworkUrl ? (
-              <img src={podcast.artworkUrl} className="h-full w-full object-cover" alt="" />
-            ) : (
-              <PodcastIcon className="h-1/3 w-1/3" aria-hidden="true" />
-            )}
-          </div>
+        <div className={sideTranscript ? 'mx-auto grid max-w-7xl grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4' : undefined}>
+          <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-5 px-5 py-6 md:gap-7 md:px-8 md:py-8">
+            <div className="grid aspect-square w-[clamp(6rem,34dvh,20rem)] max-w-full place-items-center overflow-hidden rounded-2xl bg-slate-900 text-slate-600 shadow-xl">
+              {chapterArtwork ? (
+                <img src={chapterArtwork} referrerPolicy="no-referrer" onError={() => setBrokenArtwork(broken => new Set(broken).add(chapterArtwork))} className="h-full w-full object-cover" alt="" />
+              ) : podcast?.artworkUrl ? (
+                <img src={podcast.artworkUrl} className="h-full w-full object-cover" alt="" />
+              ) : (
+                <PodcastIcon className="h-1/3 w-1/3" aria-hidden="true" />
+              )}
+            </div>
 
-          <div className="w-full break-words text-center">
-            <h2 className="text-xl font-bold md:text-3xl">{episode.title}</h2>
-            {current && (
-              <p className="mt-1 text-sm text-slate-300 md:text-base">
-                <span className="sr-only">Chapter: </span>{chapterTitle(current, chapters.indexOf(current))}
+            <div className="w-full break-words text-center">
+              <h2 className="text-xl font-bold md:text-3xl">{episode.title}</h2>
+              {current && (
+                <p className="mt-1 text-sm text-slate-300 md:text-base">
+                  <span className="sr-only">Chapter: </span>{chapterTitle(current, chapters.indexOf(current))}
+                </p>
+              )}
+              {podcast?.title && <p className="mt-1 text-sm font-medium text-blue-400 md:text-base">{podcast.title}</p>}
+            </div>
+
+            {playbackError && (
+              <div role="alert" className="text-center text-sm text-red-300">
+                Couldn’t play this episode. <button type="button" className="ml-2 font-bold underline" onClick={retry}>Retry playback</button>
+              </div>
+            )}
+
+            <PlaybackTimeline key={episode.audioUrl} {...timeline} chapters={chapters} />
+            {speed !== 1 && Number.isFinite(timeline.duration) && timeline.duration > timeline.currentTime && (
+              <p className="-mt-3 text-sm tabular-nums text-slate-400">
+                <span className="sr-only">{remaining} remaining at {formatSpeed(speed)}</span>
+                <span aria-hidden="true">-{remaining} at {formatSpeed(speed)}</span>
               </p>
             )}
-            {podcast?.title && <p className="mt-1 text-sm font-medium text-blue-400 md:text-base">{podcast.title}</p>}
-          </div>
 
-          {playbackError && (
-            <div role="alert" className="text-center text-sm text-red-300">
-              Couldn’t play this episode. <button type="button" className="ml-2 font-bold underline" onClick={retry}>Retry playback</button>
+            <div className={`flex items-center md:gap-10 ${chapters.length ? 'gap-3 sm:gap-7' : 'gap-7'}`}>
+              {chapters.length > 0 && (
+                <button type="button" aria-label="Previous chapter" disabled={!previous} onClick={() => previous && timeline.seek(previous.start)} className="grid h-11 w-11 place-items-center rounded-full text-slate-300 enabled:hover:bg-slate-800 enabled:hover:text-white disabled:opacity-30">
+                  <SkipBack size={22} aria-hidden="true" />
+                </button>
+              )}
+              <button type="button" aria-label={`Back ${skipBackwardSeconds} seconds`} onClick={() => skip(-skipBackwardSeconds)} className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-full text-slate-300 hover:bg-slate-800 hover:text-white">
+                <RotateCcw size={24} aria-hidden="true" />
+                <span className="text-xs font-semibold">{skipBackwardSeconds}s</span>
+              </button>
+              <button type="button" aria-label={isPlaying ? 'Pause' : 'Play'} onClick={togglePlay} className="grid h-16 w-16 place-items-center rounded-full bg-white text-slate-900 shadow-lg hover:bg-slate-200">
+                {isPlaying ? <Pause fill="currentColor" size={30} /> : <Play fill="currentColor" size={30} className="ml-1" />}
+              </button>
+              <button type="button" aria-label={`Forward ${skipForwardSeconds} seconds`} onClick={() => skip(skipForwardSeconds)} className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-full text-slate-300 hover:bg-slate-800 hover:text-white">
+                <RotateCw size={24} aria-hidden="true" />
+                <span className="text-xs font-semibold">{skipForwardSeconds}s</span>
+              </button>
+              {chapters.length > 0 && (
+                <button type="button" aria-label="Next chapter" disabled={!next} onClick={() => next && timeline.seek(next.start)} className="grid h-11 w-11 place-items-center rounded-full text-slate-300 enabled:hover:bg-slate-800 enabled:hover:text-white disabled:opacity-30">
+                  <SkipForward size={22} aria-hidden="true" />
+                </button>
+              )}
             </div>
-          )}
 
-          <PlaybackTimeline key={episode.audioUrl} {...timeline} chapters={chapters} />
-          {speed !== 1 && Number.isFinite(timeline.duration) && timeline.duration > timeline.currentTime && (
-            <p className="-mt-3 text-sm tabular-nums text-slate-400">
-              <span className="sr-only">{remaining} remaining at {formatSpeed(speed)}</span>
-              <span aria-hidden="true">-{remaining} at {formatSpeed(speed)}</span>
-            </p>
-          )}
+            <div className="flex items-center gap-3">
+              <SpeedControl
+                speed={speed}
+                hasOverride={hasSpeedOverride}
+                canOverride={!!episode.podcastId}
+                onSpeed={onSpeed}
+                onOverride={onSpeedOverride}
+                className="px-4 py-2 text-sm"
+              />
+              <SleepTimerControl
+                {...sleep}
+                chapterEnd={Number.isFinite(current?.end) ? current?.end : undefined}
+                episodeId={episode.id}
+                className="px-4 py-2 text-sm" />
+            </div>
 
-          <div className={`flex items-center md:gap-10 ${chapters.length ? 'gap-3 sm:gap-7' : 'gap-7'}`}>
-            {chapters.length > 0 && (
-              <button type="button" aria-label="Previous chapter" disabled={!previous} onClick={() => previous && timeline.seek(previous.start)} className="grid h-11 w-11 place-items-center rounded-full text-slate-300 enabled:hover:bg-slate-800 enabled:hover:text-white disabled:opacity-30">
-                <SkipBack size={22} aria-hidden="true" />
-              </button>
-            )}
-            <button type="button" aria-label={`Back ${skipBackwardSeconds} seconds`} onClick={() => skip(-skipBackwardSeconds)} className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-full text-slate-300 hover:bg-slate-800 hover:text-white">
-              <RotateCcw size={24} aria-hidden="true" />
-              <span className="text-xs font-semibold">{skipBackwardSeconds}s</span>
-            </button>
-            <button type="button" aria-label={isPlaying ? 'Pause' : 'Play'} onClick={togglePlay} className="grid h-16 w-16 place-items-center rounded-full bg-white text-slate-900 shadow-lg hover:bg-slate-200">
-              {isPlaying ? <Pause fill="currentColor" size={30} /> : <Play fill="currentColor" size={30} className="ml-1" />}
-            </button>
-            <button type="button" aria-label={`Forward ${skipForwardSeconds} seconds`} onClick={() => skip(skipForwardSeconds)} className="flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-full text-slate-300 hover:bg-slate-800 hover:text-white">
-              <RotateCw size={24} aria-hidden="true" />
-              <span className="text-xs font-semibold">{skipForwardSeconds}s</span>
-            </button>
-            {chapters.length > 0 && (
-              <button type="button" aria-label="Next chapter" disabled={!next} onClick={() => next && timeline.seek(next.start)} className="grid h-11 w-11 place-items-center rounded-full text-slate-300 enabled:hover:bg-slate-800 enabled:hover:text-white disabled:opacity-30">
-                <SkipForward size={22} aria-hidden="true" />
-              </button>
-            )}
+            <NowPlayingTabs tabs={tabs} />
           </div>
-
-          <div className="flex items-center gap-3">
-            <SpeedControl
-              speed={speed}
-              hasOverride={hasSpeedOverride}
-              canOverride={!!episode.podcastId}
-              onSpeed={onSpeed}
-              onOverride={onSpeedOverride}
-              className="px-4 py-2 text-sm"
-            />
-            <SleepTimerControl
-              {...sleep}
-              chapterEnd={Number.isFinite(current?.end) ? current?.end : undefined}
-              episodeId={episode.id}
-              className="px-4 py-2 text-sm" />
-          </div>
-
-          <NowPlayingTabs tabs={tabs} />
+          {sideTranscript && (
+            <aside aria-labelledby="now-playing-transcript-heading" className="sticky top-[calc(4.25rem+1px)] flex h-[calc(100dvh-4.25rem-1px)] flex-col gap-3 py-8 pr-8">
+              <h2 id="now-playing-transcript-heading" className="text-sm font-semibold text-slate-300">Transcript</h2>
+              <div className="min-h-0 flex-1">{sideTranscript}</div>
+            </aside>
+          )}
         </div>
       ) : (
         <p className="px-5 py-12 text-center text-slate-400">No episode selected</p>
