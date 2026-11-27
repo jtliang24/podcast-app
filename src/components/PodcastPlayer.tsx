@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { 
   RotateCcw, RotateCw, Pause, Play, List, Maximize2, Moon, Podcast as PodcastIcon
 } from 'lucide-react';
@@ -70,6 +70,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
   retry,
 }) => {
   const nowPlayingRef = useRef<HTMLDialogElement>(null);
+  const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
   const hasDuration = Number.isFinite(duration) && duration > 0;
   const progress = hasDuration && Number.isFinite(currentTime) ? currentTime / duration : 0;
 
@@ -89,7 +90,10 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
             aria-controls="now-playing"
             onClick={event => {
               event.currentTarget.focus();
-              nowPlayingRef.current?.showModal();
+              const dialog = nowPlayingRef.current;
+              if (!dialog || dialog.open) return;
+              dialog.showModal();
+              setNowPlayingOpen(true);
             }}
             disabled={!currentEpisode}
             className="flex w-full min-w-0 items-center gap-3 rounded-lg text-left enabled:hover:bg-slate-800 md:w-1/3"
@@ -170,6 +174,8 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
       </div>
       <NowPlayingScreen
         ref={nowPlayingRef}
+        open={nowPlayingOpen}
+        onClose={() => setNowPlayingOpen(false)}
         episode={currentEpisode}
         podcast={playingPodcast}
         isPlaying={isPlaying}

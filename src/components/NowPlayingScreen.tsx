@@ -25,6 +25,9 @@ interface PlaybackTimelineProps {
 
 interface NowPlayingScreenProps extends PlaybackTimelineProps {
   ref: Ref<HTMLDialogElement>;
+  /** Whether the dialog is shown. Chapters and the transcript are only loaded while it is. */
+  open: boolean;
+  onClose: () => void;
   episode: Episode | null;
   podcast: Podcast | null;
   isPlaying: boolean;
@@ -116,19 +119,25 @@ function PlaybackTimeline({ currentTime, duration, seek, formatTime, chapters }:
 }
 
 export default function NowPlayingScreen({
-  ref, episode, podcast, isPlaying, togglePlay, skip, skipBackwardSeconds, skipForwardSeconds, playbackError, retry, speed, hasSpeedOverride, onSpeed, onSpeedOverride, sleep, ...timeline
+  ref, open, onClose, episode, podcast, isPlaying, togglePlay, skip, skipBackwardSeconds, skipForwardSeconds, playbackError, retry, speed, hasSpeedOverride, onSpeed, onSpeedOverride, sleep, ...timeline
 }: NowPlayingScreenProps) {
   const remaining = timeline.formatTime((timeline.duration - timeline.currentTime) / speed);
-  const { chapters, current, next, previous, artwork } = useChapters(episode, timeline.duration, timeline.currentTime);
+  // Nothing outside this dialog uses the chapters or the transcript, so neither is fetched while it is closed.
+  const shown = open ? episode : null;
+  const { chapters, current, next, previous, artwork, pending: chaptersPending } = useChapters(shown, timeline.duration, timeline.currentTime);
   const [brokenArtwork, setBrokenArtwork] = useState<ReadonlySet<string>>(() => new Set());
   const chapterArtwork = artwork && !brokenArtwork.has(artwork) ? artwork : undefined;
   // The Android player's `seek` changes on every render; a stable one keeps the chapter list memoized.
   const seekRef = useRef(timeline.seek);
   seekRef.current = timeline.seek;
   const seekChapter = useCallback((time: number) => seekRef.current(time), []);
-  const transcript = useTranscript(episode);
   // On wide screens the transcript is a side panel next to the player; otherwise it is a tab.
   const wide = useMediaQuery('(min-width: 1024px)');
+  const [selectedTab, setSelectedTab] = useState<string | null>(null);
+  // The transcript file is only loaded while it is visible: the side panel, or its tab when selected. The tab is
+  // selected when chosen, or when it is the only one (no chapters, once they are loaded); see `NowPlayingTabs`.
+  const transcriptVisible = wide || selectedTab === 'transcript' || (chapters.length === 0 && !chaptersPending);
+  const transcript = useTranscript(shown, transcriptVisible);
   const transcriptPanel = (className: string) => transcript.status !== 'none' && (
     <TranscriptPanel
       key={episode ? `${episode.podcastId}\n${episode.id}` : ''}
@@ -152,6 +161,7 @@ export default function NowPlayingScreen({
     <dialog
       ref={ref}
       id="now-playing"
+      onClose={onClose}
       aria-labelledby="now-playing-heading"
       className="now-playing-dialog m-0 h-full max-h-none w-full max-w-none overflow-y-auto overscroll-contain bg-slate-950 p-0 text-white"
     >
@@ -243,7 +253,7 @@ export default function NowPlayingScreen({
                 className="px-4 py-2 text-sm" />
             </div>
 
-            <NowPlayingTabs tabs={tabs} />
+            <NowPlayingTabs tabs={tabs} selectedId={selectedTab} onSelect={setSelectedTab} />
           </div>
           {sideTranscript && (
             <aside aria-labelledby="now-playing-transcript-heading" className="sticky top-[calc(4.25rem+1px)] flex h-[calc(100dvh-4.25rem-1px)] flex-col gap-3 py-8 pr-8">

@@ -11,6 +11,7 @@ const FOLLOW_PAUSE_MS = 5000;
 const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
 
 interface TranscriptPanelProps {
+  /** `available` (not loaded yet) shows as loading. */
   transcript: Exclude<TranscriptState, { status: 'none' }>;
   /** With `seek`, a timed transcript follows playback and tapping a paragraph seeks to it. */
   currentTime?: number;
@@ -326,7 +327,7 @@ function TranscriptView({ paragraphs, timed, currentTime, seek, formatTime }: {
  * given `currentTime` and `seek` highlights and follows the paragraph playing now; untimed ones are plain text.
  */
 export default function TranscriptPanel({ transcript, currentTime, seek, formatTime, className = '' }: TranscriptPanelProps) {
-  if (transcript.status === 'loading') {
+  if (transcript.status === 'loading' || transcript.status === 'available') {
     return (
       <p role="status" className="flex items-center justify-center gap-2 py-8 text-sm text-slate-400">
         <Loader2 size={18} className="animate-spin" aria-hidden="true" />

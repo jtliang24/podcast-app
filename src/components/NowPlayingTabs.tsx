@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 
 export interface NowPlayingTab {
@@ -11,9 +11,15 @@ export interface NowPlayingTab {
  * The tabbed area under the Now Playing controls (chapters, and the transcript on narrow screens). Only tabs with content
  * should be passed; with none, nothing is shown. Follows the WAI-ARIA tabs pattern: arrow keys, Home and End
  * move between tabs, and selection follows focus.
+ *
+ * The selection is controlled, so the owner knows which panel is shown: `selectedId`, or the first tab when
+ * it isn't among `tabs`.
  */
-export default function NowPlayingTabs({ tabs }: { tabs: NowPlayingTab[] }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+export default function NowPlayingTabs({ tabs, selectedId, onSelect }: {
+  tabs: NowPlayingTab[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
   if (!tabs.length) return null;
   const selectedIndex = Math.max(0, tabs.findIndex(tab => tab.id === selectedId));
@@ -30,7 +36,7 @@ export default function NowPlayingTabs({ tabs }: { tabs: NowPlayingTab[] }) {
     if (target === undefined) return;
     event.preventDefault();
     const tab = tabs[(target + tabs.length) % tabs.length];
-    setSelectedId(tab.id);
+    onSelect(tab.id);
     tabRefs.current.get(tab.id)?.focus();
   };
 
@@ -52,7 +58,7 @@ export default function NowPlayingTabs({ tabs }: { tabs: NowPlayingTab[] }) {
               aria-selected={isSelected}
               aria-controls={`now-playing-panel-${tab.id}`}
               tabIndex={isSelected ? 0 : -1}
-              onClick={() => setSelectedId(tab.id)}
+              onClick={() => onSelect(tab.id)}
               className={`-mb-px border-b-2 px-4 py-3 text-sm font-semibold ${isSelected ? 'border-blue-400 text-white' : 'border-transparent text-slate-400 hover:text-white'}`}
             >
               {tab.label}
