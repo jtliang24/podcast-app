@@ -1,8 +1,21 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Moon } from 'lucide-react';
 import { SLEEP_TIMER_OPTIONS, canExtend, sleepTimerOptionLabel } from '../services/sleepTimer';
-import type { SleepTimerControls, SleepTimerOption } from '../services/sleepTimer';
+import type { SleepTimer, SleepTimerControls, SleepTimerOption } from '../services/sleepTimer';
 import { useSleepTimerLabel } from '../hooks/useSleepTimer';
+
+/** How far apart (in seconds) a running `position` timer and the current chapter's end can be and still match. */
+const CHAPTER_END_TOLERANCE = 1;
+
+/** Whether `option` is the running timer. **End of chapter** is only the one set for this chapter of this episode. */
+function isActive(option: SleepTimerOption, timer: SleepTimer | null): boolean {
+  if (!timer || option.kind !== timer.kind) return false;
+  if (option.kind === 'time') return false;
+  if (option.kind === 'position' && timer.kind === 'position') {
+    return option.episodeId === timer.episodeId && Math.abs(option.until - timer.until) < CHAPTER_END_TOLERANCE;
+  }
+  return true;
+}
 
 interface SleepTimerControlProps extends SleepTimerControls {
   disabled?: boolean;
@@ -112,7 +125,7 @@ export default function SleepTimerControl({
           )}
           <div className="flex flex-wrap gap-2">
             {options.map(option => {
-              const active = option.kind !== 'time' && sleepTimer?.kind === option.kind;
+              const active = isActive(option, sleepTimer);
               return (
                 <button
                   key={sleepTimerOptionLabel(option)}
