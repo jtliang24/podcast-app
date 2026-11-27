@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
@@ -45,6 +46,10 @@ import org.json.JSONObject;
 public class PlaybackService extends MediaSessionService {
     static final String LOCAL_BIND = "io.github.jtliang24.podcastapp.PLAYBACK";
     private static final int CHECKPOINT_INTERVAL_MS = 10_000;
+    private static final long SLEEP_CHECK_MS = 500;
+    private static final long SLEEP_FADE_STEP_MS = 100;
+    /** Matches `SLEEP_TIMER_FADE_MS` in `sleepTimer.ts`. */
+    private static final long SLEEP_FADE_MS = 10_000;
     private static final SessionCommand SKIP_BACK = new SessionCommand("podcast.skip_back", Bundle.EMPTY);
     private static final SessionCommand SKIP_FORWARD = new SessionCommand("podcast.skip_forward", Bundle.EMPTY);
 
@@ -64,6 +69,7 @@ public class PlaybackService extends MediaSessionService {
             main.postDelayed(this, CHECKPOINT_INTERVAL_MS);
         }
     };
+    private final Runnable sleepCheck = this::checkSleepTimer;
 
     private ExoPlayer player;
     private SessionPlayer sessionPlayer;
@@ -79,6 +85,17 @@ public class PlaybackService extends MediaSessionService {
     private boolean invalidSource;
     private boolean skipButtonsVisible;
     private boolean autoRemoveFinishedDownloads;
+    // The sleep timer runs here because the WebView can be suspended. At most one kind is set, and none survives
+    // the service. It mirrors `useSleepTimer` in the web player.
+    /** A wall-clock deadline in {@link SystemClock#elapsedRealtime()}, or 0. */
+    private long sleepAtElapsed;
+    private boolean sleepAtEpisodeEnd;
+    /** The media position at which episode {@link #sleepEpisodeId} stops, or -1. Other episodes never stop. */
+    private long sleepUntilPositionMs = -1;
+    @Nullable private String sleepEpisodeId;
+    private boolean sleepFading;
+    private long sleepFadeStartedAt;
+    private float sleepFadeVolume = 1;
 
     @Override
     public void onCreate() {
@@ -146,7 +163,11 @@ public class PlaybackService extends MediaSessionService {
 
             @Override
             public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
-                if (!playWhenReady && !replacing) checkpoint(true);
+                if (!playWhenReady && !replacing) {
+                    // Pausing mid-fade, from any controller, ends the sleep timer at full volume.
+                    if (sleepFading) clearSleepTimer();
+                    checkpoint(true);
+                }
             }
 
             @Override
@@ -250,6 +271,9 @@ public class PlaybackService extends MediaSessionService {
                 case "speed":
                     setSpeed(options.optString("episodeId"), options.optDouble("playbackSpeed", 1));
                     break;
+                case "sleep":
+                    setSleepTimer(options);
+                    break;
                 case "acknowledge":
                     long acknowledged = options.getLong("revision");
                     for (Iterator<JSONObject> changes = pending.values().iterator(); changes.hasNext();) {
@@ -274,6 +298,139 @@ public class PlaybackService extends MediaSessionService {
         if (current == null || !current.id().equals(episodeId)) return;
         current = current.at(current.position, Track.speed(speed));
         player.setPlaybackSpeed((float) current.speed);
+    }
+
+    /**
+     * Handles the `sleep` action. `time` takes `minutes` of wall-clock time, `episode` stops at the end of the
+     * current episode, `position` stops episode `episodeId` at media position `until` in seconds, and `off` cancels.
+     * `extend` pushes the running timer back by `extendMs`, like `extend()` in `sleepTimer.ts`.
+     */
+    private void setSleepTimer(JSONObject options) throws JSONException {
+        String mode = options.getString("mode");
+        if ("extend".equals(mode)) {
+            extendSleepTimer(options.getLong("extendMs"));
+            return;
+        }
+        clearSleepTimer();
+        switch (mode) {
+            case "time" -> {
+                double minutes = options.getDouble("minutes");
+                if (!(minutes > 0)) throw new IllegalArgumentException("Invalid sleep timer duration");
+                sleepAtElapsed = SystemClock.elapsedRealtime() + Math.round(minutes * 60_000);
+            }
+            case "episode" -> sleepAtEpisodeEnd = true;
+            case "position" -> {
+                sleepUntilPositionMs = Math.max(0, milliseconds(options.getDouble("until")));
+                sleepEpisodeId = options.getString("episodeId");
+            }
+            case "off" -> { }
+            default -> throw new IllegalArgumentException("Unknown sleep timer mode");
+        }
+        scheduleSleepCheck();
+    }
+
+    /**
+     * A `time` timer that already ran out, for example while fading, extends from now. A `position` timer moves by
+     * `ms` of media time. An `episode` timer doesn't change.
+     */
+    private void extendSleepTimer(long ms) {
+        if (sleepAtElapsed != 0) {
+            sleepAtElapsed = Math.max(sleepAtElapsed, SystemClock.elapsedRealtime()) + ms;
+        } else if (sleepUntilPositionMs >= 0) {
+            sleepUntilPositionMs += ms;
+        } else {
+            return;
+        }
+        stopSleepFade();
+        scheduleSleepCheck();
+    }
+
+    /** Ends the sleep timer, putting the volume back if it was fading. */
+    private void clearSleepTimer() {
+        stopSleepFade();
+        sleepAtElapsed = 0;
+        sleepAtEpisodeEnd = false;
+        sleepUntilPositionMs = -1;
+        sleepEpisodeId = null;
+        main.removeCallbacks(sleepCheck);
+    }
+
+    private void stopSleepFade() {
+        if (!sleepFading) return;
+        sleepFading = false;
+        player.setVolume(sleepFadeVolume);
+    }
+
+    /** Checks while a timer needs watching. "End of episode" doesn't, because {@link #finishEpisode()} handles it. */
+    private void scheduleSleepCheck() {
+        main.removeCallbacks(sleepCheck);
+        if (sleepFading || sleepAtElapsed != 0 || sleepUntilPositionMs >= 0) {
+            main.postDelayed(sleepCheck, sleepFading ? SLEEP_FADE_STEP_MS : SLEEP_CHECK_MS);
+        }
+    }
+
+    private boolean sleepTimerExpired(long now) {
+        return (sleepAtElapsed != 0 && now >= sleepAtElapsed) || (sleepUntilPositionMs >= 0 && current != null
+            && current.id().equals(sleepEpisodeId) && position() >= sleepUntilPositionMs);
+    }
+
+    /**
+     * When the timer runs out, fades the volume out over {@link #SLEEP_FADE_MS}, then pauses through the normal
+     * pause path, so progress is saved as for a user pause, and puts the volume back. Timers that run out while
+     * paused just end.
+     */
+    private void checkSleepTimer() {
+        long now = SystemClock.elapsedRealtime();
+        if (sleepFading) {
+            if (current == null || !player.getPlayWhenReady()) {
+                clearSleepTimer();
+                return;
+            }
+            float progress = (now - sleepFadeStartedAt) / (float) SLEEP_FADE_MS;
+            if (progress >= 1) {
+                float volume = sleepFadeVolume;
+                // Clear the fade first, so the pause below isn't taken for a pause mid-fade.
+                sleepFading = false;
+                clearSleepTimer();
+                player.pause();
+                player.setVolume(volume);
+                return;
+            }
+            player.setVolume(sleepFadeVolume * (1 - progress));
+        } else if (sleepTimerExpired(now)) {
+            if (current == null || !player.getPlayWhenReady()) {
+                clearSleepTimer();
+                return;
+            }
+            sleepFading = true;
+            sleepFadeStartedAt = now;
+            sleepFadeVolume = player.getVolume();
+        }
+        scheduleSleepCheck();
+    }
+
+    /**
+     * Called when an episode ends. Returns whether the next episode should load paused: for "end of episode", a
+     * timer fading out or already run out, or a `position` timer on the finished episode. Those timers are cleared.
+     */
+    private boolean endSleepTimerWithEpisode(String episodeId) {
+        boolean stop = sleepAtEpisodeEnd || sleepFading
+            || (sleepAtElapsed != 0 && SystemClock.elapsedRealtime() >= sleepAtElapsed)
+            || (sleepUntilPositionMs >= 0 && episodeId.equals(sleepEpisodeId));
+        if (stop) clearSleepTimer();
+        return stop;
+    }
+
+    private JSObject sleepSnapshot() {
+        JSObject sleep = new JSObject();
+        if (sleepAtElapsed != 0) {
+            return sleep.put("mode", "time").put("remainingMs", Math.max(0, sleepAtElapsed - SystemClock.elapsedRealtime()));
+        }
+        if (sleepAtEpisodeEnd) return sleep.put("mode", "episode");
+        if (sleepUntilPositionMs >= 0) {
+            return sleep.put("mode", "position").put("until", sleepUntilPositionMs / 1000.0).put("episodeId", sleepEpisodeId);
+        }
+        return sleep.put("mode", "off");
     }
 
     private final class SessionPlayer extends ForwardingSimpleBasePlayer {
@@ -362,6 +519,8 @@ public class PlaybackService extends MediaSessionService {
     }
 
     private void select(@Nullable Track track, boolean autoplay) {
+        // Changing tracks mid-fade ends the sleep timer at full volume, as pausing does.
+        if (sleepFading) clearSleepTimer();
         replacing = true;
         try {
             player.pause();
@@ -435,7 +594,9 @@ public class PlaybackService extends MediaSessionService {
         long duration = length();
         pending.remove(changeKey(finished.episode, false));
         Track next = queue.isEmpty() ? null : queue.get(0);
-        select(next, next != null);
+        // A sleep timer that ends here lets the queue advance but loads the next episode paused.
+        boolean sleepNow = endSleepTimerWithEpisode(finished.id());
+        select(next, next != null && !sleepNow);
         if (autoRemoveFinishedDownloads) {
             try {
                 downloads.finishDownload(finished.id());
@@ -499,7 +660,8 @@ public class PlaybackService extends MediaSessionService {
         return new JSObject().put("episode", current == null ? JSONObject.NULL : current.episode)
             .put("time", position() / 1000.0).put("duration", length() / 1000.0)
             .put("playing", player.isPlaying()).put("error", invalidSource || player.getPlayerError() != null)
-            .put("changes", new JSONArray(pending.values())).put("revision", revision).put("urgent", urgent);
+            .put("changes", new JSONArray(pending.values())).put("revision", revision).put("urgent", urgent)
+            .put("sleep", sleepSnapshot());
     }
 
     private static long milliseconds(double seconds) {

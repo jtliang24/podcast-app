@@ -1,9 +1,13 @@
 import type { AppState, Episode } from '../types.ts';
-import type { AndroidPlaybackState, AndroidTrack } from './android.ts';
+import type { AndroidPlaybackState, AndroidSleepState, AndroidTrack } from './android.ts';
 import { resumePoint } from './driveSync.ts';
 import { getPreferences, speedFor } from './preferences.ts';
 import { recordPodcastPlay } from './subscriptionSort.ts';
 import { orderedQueue, removeQueuedEpisode } from './playbackQueue.ts';
+import type { SleepTimer } from './sleepTimer.ts';
+
+/** How far a reported `time` timer may drift from the one shown before it's replaced. */
+const SLEEP_TIMER_DRIFT_MS = 1000;
 
 export function androidPlaybackTrack(state: AppState, episode: Episode,
   time = state.playbackProgress[episode.audioUrl]?.currentTime ?? 0): AndroidTrack {
@@ -30,6 +34,30 @@ export function androidPlaybackOpen(state: AppState) {
     skipForwardSeconds,
     autoRemoveFinishedDownloads,
   };
+}
+
+/**
+ * The sleep timer the service reports, as a `SleepTimer` read at `now`. Returns `previous` when it still describes
+ * the same timer, so the countdown in each snapshot doesn't replace it every second.
+ */
+export function androidSleepTimer(sleep: AndroidSleepState | undefined, previous: SleepTimer | null,
+  now: number): SleepTimer | null {
+  switch (sleep?.mode) {
+    case 'time': {
+      const endsAt = now + Math.max(0, sleep.remainingMs);
+      if (previous?.kind === 'time' && (Math.abs(previous.endsAt - endsAt) <= SLEEP_TIMER_DRIFT_MS
+        || (sleep.remainingMs <= 0 && previous.endsAt <= now))) return previous;
+      return { kind: 'time', endsAt };
+    }
+    case 'episode':
+      return previous?.kind === 'episode' ? previous : { kind: 'episode' };
+    case 'position':
+      return previous?.kind === 'position' && previous.episodeId === sleep.episodeId
+        && Math.abs(previous.until - sleep.until) < 0.001 ? previous
+        : { kind: 'position', until: sleep.until, episodeId: sleep.episodeId };
+    default:
+      return null;
+  }
 }
 
 export function applyAndroidPlayback(state: AppState, playback: AndroidPlaybackState): AppState {

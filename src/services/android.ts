@@ -25,6 +25,16 @@ export interface PlaybackChange {
   revision?: number;
 }
 
+/**
+ * The service's sleep timer. `time` reports `remainingMs` of wall-clock time. `position` stops episode `episodeId`
+ * at media position `until`, in seconds.
+ */
+export type AndroidSleepState =
+  | { mode: 'off' }
+  | { mode: 'time'; remainingMs: number }
+  | { mode: 'episode' }
+  | { mode: 'position'; until: number; episodeId: string };
+
 export interface AndroidPlaybackState {
   episode: Episode | null;
   time: number;
@@ -34,11 +44,13 @@ export interface AndroidPlaybackState {
   revision: number;
   changes: PlaybackChange[];
   urgent: boolean;
+  sleep: AndroidSleepState;
 }
 
 interface PlaybackCommand {
   profile: string;
-  action: 'open' | 'snapshot' | 'queue' | 'select' | 'toggle' | 'seek' | 'skip' | 'preferences' | 'acknowledge' | 'speed';
+  action: 'open' | 'snapshot' | 'queue' | 'select' | 'toggle' | 'seek' | 'skip' | 'preferences' | 'acknowledge' | 'speed'
+    | 'sleep';
   queue?: AndroidTrack[];
   track?: AndroidTrack;
   autoplay?: boolean;
@@ -48,9 +60,19 @@ interface PlaybackCommand {
   skipBackwardSeconds?: number;
   skipForwardSeconds?: number;
   autoRemoveFinishedDownloads?: boolean;
-  /** For `speed`: the episode the speed applies to, ignored if another episode is now current. */
+  /**
+   * For `speed`: the episode the speed applies to, ignored if another episode is now current.
+   * For `sleep` with mode `position`: the only episode the timer stops.
+   */
   episodeId?: string;
   playbackSpeed?: number;
+  /** For `sleep`: `extend` pushes the running timer back by `extendMs`, like `extend()` in `sleepTimer.ts`. */
+  mode?: AndroidSleepState['mode'] | 'extend';
+  /** For `sleep` with mode `time`: wall-clock minutes from now. */
+  minutes?: number;
+  /** For `sleep` with mode `position`: media position in seconds. */
+  until?: number;
+  extendMs?: number;
 }
 
 export interface DownloadConnection {

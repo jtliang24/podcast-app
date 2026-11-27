@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { androidPlaybackOpen, androidPlaybackQueue, applyAndroidPlayback } from '../src/services/androidPlaybackState.ts';
+import {
+  androidPlaybackOpen, androidPlaybackQueue, androidSleepTimer, applyAndroidPlayback,
+} from '../src/services/androidPlaybackState.ts';
 import { INITIAL_STATE } from '../src/types.ts';
 
 const episode = id => ({ id, title: id, audioUrl: `https://example.org/${id}.mp3`, duration: 60 });
@@ -99,4 +101,29 @@ test('each track carries its own podcast speed', () => {
   assert.equal(androidPlaybackOpen(state).track?.playbackSpeed, 1.5);
   assert.deepEqual(androidPlaybackQueue({ ...INITIAL_STATE, queue: { primary: [overridden], secondary: [] } })
     .map(track => track.playbackSpeed), [1]);
+});
+
+test('the service sleep timer maps to a stable SleepTimer', () => {
+  const now = 1_000_000;
+  assert.equal(androidSleepTimer({ mode: 'off' }, { kind: 'episode' }, now), null);
+  assert.equal(androidSleepTimer(undefined, null, now), null);
+
+  const timer = androidSleepTimer({ mode: 'time', remainingMs: 60_000 }, null, now);
+  assert.deepEqual(timer, { kind: 'time', endsAt: now + 60_000 });
+  // Each poll's countdown keeps the same object while it agrees within a second.
+  assert.equal(androidSleepTimer({ mode: 'time', remainingMs: 59_100 }, timer, now + 1000), timer);
+  assert.deepEqual(androidSleepTimer({ mode: 'time', remainingMs: 360_000 }, timer, now + 1000),
+    { kind: 'time', endsAt: now + 361_000 });
+  // A timer that ran out and is fading stays put.
+  assert.equal(androidSleepTimer({ mode: 'time', remainingMs: 0 }, timer, now + 65_000), timer);
+
+  const episode = androidSleepTimer({ mode: 'episode' }, null, now);
+  assert.deepEqual(episode, { kind: 'episode' });
+  assert.equal(androidSleepTimer({ mode: 'episode' }, episode, now), episode);
+
+  const chapter = androidSleepTimer({ mode: 'position', until: 90.5, episodeId: 'first' }, null, now);
+  assert.deepEqual(chapter, { kind: 'position', until: 90.5, episodeId: 'first' });
+  assert.equal(androidSleepTimer({ mode: 'position', until: 90.5, episodeId: 'first' }, chapter, now), chapter);
+  assert.deepEqual(androidSleepTimer({ mode: 'position', until: 90.5, episodeId: 'second' }, chapter, now),
+    { kind: 'position', until: 90.5, episodeId: 'second' });
 });

@@ -2,27 +2,26 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Episode } from '../types';
 import { AndroidDownloads, AndroidPlayback } from '../services/android';
 import type { AndroidPlaybackState } from '../services/android';
-import { androidPlaybackOpen, androidPlaybackQueue, androidPlaybackTrack, applyAndroidPlayback } from '../services/androidPlaybackState';
+import {
+  androidPlaybackOpen, androidPlaybackQueue, androidPlaybackTrack, androidSleepTimer, applyAndroidPlayback,
+} from '../services/androidPlaybackState';
 import { resumePoint } from '../services/driveSync';
 import type { ResumePoint } from '../services/driveSync';
 import { speedFor } from '../services/preferences';
-import type { SleepTimerControls } from '../services/sleepTimer';
+import { SLEEP_TIMER_EXTENSION_MS } from '../services/sleepTimer';
+import type { SleepTimer, SleepTimerControls, SleepTimerOption } from '../services/sleepTimer';
 import { formatTime } from './usePodcastPlayer';
 import type { UsePodcastPlayerProps } from './usePodcastPlayer';
 
 type Command = Omit<Parameters<typeof AndroidPlayback.control>[0], 'profile'>;
-
-// TODO: Run the sleep timer in PlaybackService (a `sleep` action, plus `sleep` in its snapshot()), because the
-// WebView can be suspended. Until then Android has no sleep timer.
-const noSleepTimer: SleepTimerControls = {
-  sleepTimer: null, setSleepTimer: () => {}, extendSleepTimer: () => {}, cancelSleepTimer: () => {},
-};
 
 export function useAndroidPodcastPlayer({
   profile, ready, state, updateState, remoteSession, skipBackwardSeconds, skipForwardSeconds,
   autoRemoveFinishedDownloads, finishDownload, refreshDownloads,
 }: UsePodcastPlayerProps) {
   const [playback, setPlayback] = useState<AndroidPlaybackState | null>(null);
+  // PlaybackService runs the sleep timer, because the WebView can be suspended. This mirrors its snapshots.
+  const [sleepTimer, setSleepTimerState] = useState<SleepTimer | null>(null);
   const [connectionError, setConnectionError] = useState(false);
   const [remoteOffer, setRemoteOffer] = useState<ResumePoint | null>(null);
   const [acknowledgedRevision, setAcknowledgedRevision] = useState(0);
@@ -49,6 +48,7 @@ export function useAndroidPodcastPlayer({
         void refreshDownloads();
       }
       setPlayback(snapshot);
+      setSleepTimerState(previous => androidSleepTimer(snapshot.sleep, previous, Date.now()));
       setConnectionError(false);
       if (saving.current || !snapshot.changes.length) return;
       saving.current = true;
@@ -142,6 +142,16 @@ export function useAndroidPodcastPlayer({
     setRemoteOffer(null);
     void request({ action: 'select', track: androidPlaybackTrack(state, offer.episode, offer.time), autoplay: true });
   };
+  const setSleepTimer = useCallback((option: SleepTimerOption) => {
+    void request(option.kind === 'time'
+      ? { action: 'sleep', mode: 'time', minutes: option.minutes }
+      : { action: 'sleep', mode: 'episode' });
+  }, [request]);
+  const extendSleepTimer = useCallback(() => {
+    void request({ action: 'sleep', mode: 'extend', extendMs: SLEEP_TIMER_EXTENSION_MS });
+  }, [request]);
+  const cancelSleepTimer = useCallback(() => { void request({ action: 'sleep', mode: 'off' }); }, [request]);
+  const sleep: SleepTimerControls = { sleepTimer, setSleepTimer, extendSleepTimer, cancelSleepTimer };
   const retry = () => {
     if (connectionError) void open();
     else togglePlay();
@@ -154,7 +164,7 @@ export function useAndroidPodcastPlayer({
     duration: playback?.duration ?? 0,
     playbackReady: ready && playback !== null,
     playbackError: connectionError || (playback?.error ?? false),
-    retry, togglePlay, skip, seek, formatTime, playEpisode, ...noSleepTimer,
+    retry, togglePlay, skip, seek, formatTime, playEpisode, ...sleep,
     audioRef: null, audioEvents: {},
   };
 }
