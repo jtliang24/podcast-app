@@ -31,16 +31,24 @@ export function useDownloadStorage() {
     void refreshDownloads();
   }, [refreshDownloads]);
 
-  const removeDownload = useCallback((id: string) => {
+  const removeDownload = useCallback((id: string, refresh = true) => {
     const existing = removals.current.get(id);
     if (existing) return existing;
     const removal = deleteDownload(id).then(async () => {
-      if (isAndroid) await refreshDownloads();
-      else setDownloadedEpisodes(previous => previous.filter(episode => episode.id !== id));
+      if (!isAndroid) setDownloadedEpisodes(previous => previous.filter(episode => episode.id !== id));
+      else if (refresh) await refreshDownloads();
     }).finally(() => { removals.current.delete(id); });
     removals.current.set(id, removal);
     return removal;
   }, [refreshDownloads]);
+
+  const removeFinishedDownloads = useCallback(async (ids: string[]) => {
+    // Keep automatic queue downloads from immediately restoring these files.
+    setFinishedIds(previous => new Set([...previous, ...ids]));
+    const results = await Promise.allSettled(ids.map(id => removeDownload(id, false)));
+    if (isAndroid) await refreshDownloads();
+    return results.some(result => result.status === 'rejected');
+  }, [removeDownload, refreshDownloads]);
 
   const removeFinished = useCallback(async (id: string) => {
     try {
@@ -87,7 +95,7 @@ export function useDownloadStorage() {
   }, [refreshDownloads, removeFinished]);
 
   return {
-    downloadsReady, downloadedEpisodes, downloadingIds, startDownload, removeDownload,
+    downloadsReady, downloadedEpisodes, downloadingIds, startDownload, removeDownload, removeFinishedDownloads,
     refreshDownloads, finishDownload, finishedIds, forgetUnqueuedCompletions,
   };
 }

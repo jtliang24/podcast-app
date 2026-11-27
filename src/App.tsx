@@ -155,10 +155,11 @@ function Library({ storage, profile, downloads, connection }: {
   const [isRefreshingNewReleases, setIsRefreshingNewReleases] = useState(false);
   const attemptedReleaseDateBackfill = useRef(false);
   const releasesRequestInFlight = useRef(false);
-  const { downloadsReady, downloadedEpisodes, downloadingIds, removeDownload } = downloads;
+  const { downloadsReady, downloadedEpisodes, downloadingIds, removeDownload, removeFinishedDownloads } = downloads;
 
   const [actionError, setActionError] = useState<{ visit: number; message: string } | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [isRemovingFinishedDownloads, setIsRemovingFinishedDownloads] = useState(false);
   const [importingStatus, setImportingStatus] = useState<string | null>(null);
   const preferences = getPreferences(state);
   const { skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads } = preferences;
@@ -172,6 +173,17 @@ function Library({ storage, profile, downloads, connection }: {
       setDownloadError('Could not delete this download.');
     }
   }, [removeDownload]);
+
+  const handleRemoveFinishedDownloads = async (ids: string[]) => {
+    setIsRemovingFinishedDownloads(true);
+    setDownloadError(null);
+    try {
+      const hasFailures = await removeFinishedDownloads(ids);
+      if (hasFailures) setDownloadError('Could not remove all finished downloads.');
+    } finally {
+      setIsRemovingFinishedDownloads(false);
+    }
+  };
 
   // Played State Logic
   const toggleEpisodePlayed = useCallback((episodeId: string, played: boolean) => {
@@ -800,6 +812,8 @@ function Library({ storage, profile, downloads, connection }: {
               onShowDescription={showEpisode}
               handleDownload={handleDownload}
               handleDeleteDownload={handleDeleteDownload}
+              onRemoveFinishedDownloads={handleRemoveFinishedDownloads}
+              isRemovingFinishedDownloads={isRemovingFinishedDownloads}
               addToQueue={addToQueue}
               toggleEpisodePlayed={toggleEpisodePlayed}
             />
