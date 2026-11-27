@@ -12,6 +12,11 @@ A modern, local-first podcast listening application designed for privacy, portab
 - **🎵 System Integration**: Full support for the Media Session API, allowing control via lock screens, hardware buttons, and system media widgets.
 - **📑 OPML Support**: Easily import or export your podcast subscriptions using standard OPML files.
 - **🕒 Smart Queue**: Manage your listening order with a persistent, reorderable queue that stays in sync across sessions.
+- **⏩ Playback Speed**: Set a global speed and an optional per-podcast override (0.5× to 3×). Speed preferences sync through Drive with the rest of your profile.
+- **😴 Sleep Timer**: Stop after a set time, at the end of the episode, or at the end of the chapter. The volume fades out, then playback pauses. The timer is local to the device and never syncs. On Android it runs in the playback service, so it keeps working while the screen is locked.
+- **📚 Chapters**: Reads Podcasting 2.0 JSON chapters and Podlove Simple Chapters. Browse the chapter list, see chapter ticks on the timeline and chapter art, and jump to the previous or next chapter.
+- **📝 Transcripts**: Reads VTT, SRT, JSON, HTML, and plain-text transcripts. The current line is highlighted and scrolled into view, and you can search the text.
+- **🗃️ Episode Extras**: Chapter and transcript files are cached per device in the IndexedDB database `podcast_episode_extras`, never in the synced profile. Files for downloaded episodes are pinned for offline use. Private Substack feeds never fetch these files through public proxies.
 
 ## 🛠️ Technology Stack
 

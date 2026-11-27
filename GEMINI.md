@@ -15,7 +15,7 @@ A portable, local-first podcast listening application built with **React**, **Ty
 
 ## Architecture
 The application follows a "local-first" architecture with a hybrid storage model:
-1.  **State Management (Synced):** App state (subscriptions, playback progress, played status, per-podcast sort/filter settings, and the last playing episode) is managed in a local JSON file (Desktop), internally in the browser's OPFS (Mobile), or synced via Google Drive. Data portability is ensured via manual **Import/Export** or automated Cloud Sync.
+1.  **State Management (Synced):** App state (subscriptions, playback progress, played status, per-podcast sort/filter settings, playback speed preferences, and the last playing episode) is managed in a local JSON file (Desktop), internally in the browser's OPFS (Mobile), or synced via Google Drive. Data portability is ensured via manual **Import/Export** or automated Cloud Sync.
 2.  **Download Management (Device-Specific):** Audio files and their associated metadata are stored in **IndexedDB**. This ensures downloads are persistent across sessions but remain specific to the local device.
 3.  **Session Restoration:** On startup, the application automatically restores the state from the synced JSON file. It identifies the last played episode and pre-loads it into the player, restoring the exact playback position and metadata even across complete application restarts.
 4.  **File Handle Persistence:** On Desktop, the application stores the `FileSystemFileHandle` in IndexedDB. On startup, it automatically attempts to restore access to the previous state file, prompting only for permissions if needed.
@@ -23,9 +23,17 @@ The application follows a "local-first" architecture with a hybrid storage model
     - `src/services/podcastService.ts`: Handles RSS/OPML parsing and iTunes search logic. Uses CORS proxies for browser compatibility.
     - `src/services/storageService.ts`: Manages the IndexedDB lifecycle for offline episode storage.
     - `src/services/driveService.ts`: Handles Google Drive API interactions for cloud synchronization.
+    - `src/services/sleepTimer.ts`: Pure sleep timer model (time, end of episode, end of chapter) with remaining-time and stop checks. The timer is device-local and never synced.
+    - `src/services/chapters.ts`: Parses Podcasting 2.0 JSON and Podlove PSC chapters and finds the chapter, art, and position for a time.
+    - `src/services/transcripts.ts`: Parses VTT, SRT, JSON, HTML, and plain-text transcripts into paragraphs, finds the active paragraph, and searches.
+    - `src/services/extrasCache.ts`: Per-device IndexedDB cache (`podcast_episode_extras`) of chapter and transcript files. Files for downloaded episodes are pinned; others are evicted least recently used first. Never synced.
+    - `src/services/episodeExtras.ts`: Resolves an episode's chapter and transcript URLs. Private Substack feeds never use public proxies.
 6.  **Hooks:** 
     - `src/hooks/useFileSystem.ts`: Abstracts platform-specific storage logic, file handle persistence, and cloud sync.
     - `src/hooks/usePodcastPlayer.ts`: Manages audio playback state, queue logic, progress tracking, session restoration, and **Media Session API** integration for system-level controls.
+    - `src/hooks/useSleepTimer.ts`: Holds the sleep timer, fades the volume out, then pauses through the normal pause path. On Android the timer runs in the playback service.
+    - `src/hooks/useChapters.ts`: Loads and exposes an episode's chapters and the current chapter.
+    - `src/hooks/useTranscript.ts`: Loads and parses an episode's transcript.
 7.  **Playback Logic:** 
     - Automatically checks for offline audio in IndexedDB before streaming from the web.
     - Initiates background downloads when playing a remote episode.
@@ -43,6 +51,10 @@ The application follows a "local-first" architecture with a hybrid storage model
 - **New Releases**: A dedicated view aggregating the latest episodes from all subscriptions. Uses batched fetching (10 at a time) and progressive UI updates for high performance.
 - **Advanced Sorting**: Per-podcast sorting options (Newest, Oldest, A-Z, Z-a, Duration) persisted in the state file.
 - **Played Tracking**: Global tracking of played episodes with manual toggles, automatic marking, and "Hide Played" filtering.
+- **Playback Speed**: A global speed plus per-podcast overrides, stored in the synced state.
+- **Sleep Timer**: Timed, end-of-episode, or end-of-chapter timer that fades out and pauses. Device-local, not synced.
+- **Chapters**: Podcasting 2.0 JSON and Podlove PSC chapters with a list, timeline ticks, chapter art, and previous/next navigation.
+- **Transcripts**: VTT, SRT, JSON, HTML, and plain-text transcripts with a synced highlight, auto-scroll, and search. Chapter and transcript files are cached per device and pinned for downloaded episodes.
 - **Episode Details**: Dedicated view for reading full episode descriptions and metadata (including keywords).
 
 ## Project Structure
@@ -52,6 +64,9 @@ The application follows a "local-first" architecture with a hybrid storage model
 - `src/services/podcastService.ts`: RSS/OPML parsing and search.
 - `src/services/storageService.ts`: IndexedDB wrapper for downloads.
 - `src/services/driveService.ts`: Google Drive synchronization service.
+- `src/hooks/useSleepTimer.ts`, `useChapters.ts`, `useTranscript.ts`: Sleep timer, chapter, and transcript hooks.
+- `src/services/sleepTimer.ts`, `chapters.ts`, `transcripts.ts`: Sleep timer model and chapter/transcript parsing.
+- `src/services/extrasCache.ts`, `episodeExtras.ts`: Per-device cache and URL resolution for chapter and transcript files.
 - `src/types.ts`: TypeScript interfaces for Podcasts, Episodes, and App State.
 
 ## Building and Running
