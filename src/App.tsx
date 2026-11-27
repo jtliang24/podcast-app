@@ -225,7 +225,11 @@ function Library({ storage, profile, downloads, connection }: {
     skip,
     seek,
     formatTime,
-    playEpisode
+    playEpisode,
+    sleepTimer,
+    setSleepTimer,
+    extendSleepTimer,
+    cancelSleepTimer,
   } = usePlayer({
     state, profile, ready, skipBackwardSeconds, skipForwardSeconds,
     updateState, downloadedEpisodes, downloadsReady, remoteSession,
@@ -919,6 +923,7 @@ function Library({ storage, profile, downloads, connection }: {
         hasSpeedOverride={hasSpeedOverride}
         onSpeed={setSpeed}
         onSpeedOverride={setSpeedOverride}
+        sleep={{ sleepTimer, setSleepTimer, extendSleepTimer, cancelSleepTimer }}
         formatTime={formatTime}
         playbackError={playbackError}
         retry={retry}

@@ -3,7 +3,9 @@ import type { CSSProperties, Ref } from 'react';
 import { ChevronDown, Pause, Play, Podcast as PodcastIcon, RotateCcw, RotateCw } from 'lucide-react';
 import type { Episode, Podcast, SkipInterval } from '../types';
 import SpeedControl from './SpeedControl';
+import SleepTimerControl from './SleepTimerControl';
 import { formatSpeed } from '../services/preferences';
+import type { SleepTimerControls } from '../services/sleepTimer';
 
 interface PlaybackTimelineProps {
   currentTime: number;
@@ -27,6 +29,7 @@ interface NowPlayingScreenProps extends PlaybackTimelineProps {
   hasSpeedOverride: boolean;
   onSpeed: (speed: number) => void;
   onSpeedOverride: (enabled: boolean) => void;
+  sleep: SleepTimerControls;
 }
 
 function PlaybackTimeline({ currentTime, duration, seek, formatTime }: PlaybackTimelineProps) {
@@ -85,7 +88,7 @@ function PlaybackTimeline({ currentTime, duration, seek, formatTime }: PlaybackT
 }
 
 export default function NowPlayingScreen({
-  ref, episode, podcast, isPlaying, togglePlay, skip, skipBackwardSeconds, skipForwardSeconds, playbackError, retry, speed, hasSpeedOverride, onSpeed, onSpeedOverride, ...timeline
+  ref, episode, podcast, isPlaying, togglePlay, skip, skipBackwardSeconds, skipForwardSeconds, playbackError, retry, speed, hasSpeedOverride, onSpeed, onSpeedOverride, sleep, ...timeline
 }: NowPlayingScreenProps) {
   return (
     <dialog
@@ -148,14 +151,17 @@ export default function NowPlayingScreen({
             </button>
           </div>
 
-          <SpeedControl
-            speed={speed}
-            hasOverride={hasSpeedOverride}
-            canOverride={!!episode.podcastId}
-            onSpeed={onSpeed}
-            onOverride={onSpeedOverride}
-            className="px-4 py-2 text-sm"
-          />
+          <div className="flex items-center gap-3">
+            <SpeedControl
+              speed={speed}
+              hasOverride={hasSpeedOverride}
+              canOverride={!!episode.podcastId}
+              onSpeed={onSpeed}
+              onOverride={onSpeedOverride}
+              className="px-4 py-2 text-sm"
+            />
+            <SleepTimerControl {...sleep} className="px-4 py-2 text-sm" />
+          </div>
         </div>
       ) : (
         <p className="px-5 py-12 text-center text-slate-400">No episode selected</p>

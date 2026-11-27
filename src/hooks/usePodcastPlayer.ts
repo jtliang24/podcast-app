@@ -7,6 +7,7 @@ import type { StateUpdate } from '../services/profileChanges';
 import { recordPodcastPlay } from '../services/subscriptionSort';
 import { speedFor } from '../services/preferences';
 import { nextEpisode, removeQueuedEpisode } from '../services/playbackQueue';
+import { useSleepTimer } from './useSleepTimer';
 
 export interface UsePodcastPlayerProps {
   profile: string;
@@ -179,6 +180,7 @@ export function usePodcastPlayer({
     if (!audioRef.current?.paused) return;
     setIsPlaying(false);
     updatePositionState();
+    onSleepPause();
     if (item?.started) {
       checkpoint(true);
       item.started = false;
@@ -195,6 +197,8 @@ export function usePodcastPlayer({
       selected.current.started = false;
     }
   }, [checkpoint]);
+
+  const { controls: sleep, checkSleepTimer, onSleepPause, endSleepTimerWithEpisode } = useSleepTimer(audioRef, pause);
 
   const retry = useCallback(() => {
     const item = selected.current;
@@ -255,6 +259,7 @@ export function usePodcastPlayer({
     if (audio && selected.current?.positioned && !audio.error) {
       selected.current.time = audio.currentTime;
       setCurrentTime(audio.currentTime);
+      checkSleepTimer(audio.currentTime, selected.current.episode.id);
     }
   };
 
@@ -315,6 +320,8 @@ export function usePodcastPlayer({
     const { episode } = item;
     item.ending = true;
     item.started = false;
+    // A sleep timer that ends here lets the queue advance but loads the next episode paused.
+    const sleepNow = endSleepTimerWithEpisode(episode.id);
     const finishedAt = Date.now();
     setRemoteOffer(null);
     setIsPlaying(false);
@@ -341,7 +348,7 @@ export function usePodcastPlayer({
     }, true);
     if (selected.current !== item) return;
     if (next) {
-      select(next.episode, next.time, true);
+      select(next.episode, next.time, !sleepNow);
     } else {
       selected.current = null;
       setCurrentEpisode(null);
@@ -362,7 +369,7 @@ export function usePodcastPlayer({
   return {
     currentEpisode, playingPodcast, isPlaying, currentTime, duration, audioRef, offer, hasRemoteOffer: !!remoteOffer, continueListening,
     playbackReady: ready,
-    playbackError, retry, togglePlay, skip, seek, formatTime, playEpisode,
+    playbackError, retry, togglePlay, skip, seek, formatTime, playEpisode, ...sleep,
     audioEvents: { onLoadedMetadata: onMetadata, onPlaying, onPause, onTimeUpdate, onEnded: handleEpisodeEnded,
       onWaiting: () => setIsPlaying(false), onEmptied: () => setIsPlaying(false), onError },
   };

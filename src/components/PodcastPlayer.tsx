@@ -1,8 +1,10 @@
 import React, { useRef } from 'react';
 import { 
-  RotateCcw, RotateCw, Pause, Play, List, Maximize2, Podcast as PodcastIcon
+  RotateCcw, RotateCw, Pause, Play, List, Maximize2, Moon, Podcast as PodcastIcon
 } from 'lucide-react';
 import type { Episode, Podcast, SkipInterval } from '../types';
+import type { SleepTimer, SleepTimerControls } from '../services/sleepTimer';
+import { useSleepTimerLabel } from '../hooks/useSleepTimer';
 import NowPlayingScreen from './NowPlayingScreen';
 import SpeedControl from './SpeedControl';
 
@@ -25,9 +27,22 @@ interface PodcastPlayerProps {
   hasSpeedOverride: boolean;
   onSpeed: (speed: number) => void;
   onSpeedOverride: (enabled: boolean) => void;
+  sleep: SleepTimerControls;
   formatTime: (time: number) => string;
   playbackError: boolean;
   retry: () => void;
+}
+
+/** Shows the sleep timer's time left in the player bar. Now Playing has the controls. */
+function SleepIndicator({ timer }: { timer: SleepTimer | null }) {
+  const label = useSleepTimerLabel(timer);
+  if (!label) return null;
+  return (
+    <span className="flex items-center gap-1 rounded bg-slate-800 px-2 py-1 tabular-nums text-blue-300">
+      <Moon size={12} aria-hidden="true" />
+      <span className="sr-only">Sleep timer: </span>{label}
+    </span>
+  );
 }
 
 const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
@@ -49,6 +64,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
   hasSpeedOverride,
   onSpeed,
   onSpeedOverride,
+  sleep,
   formatTime,
   playbackError,
   retry,
@@ -139,6 +155,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
               onSpeed={onSpeed}
               onOverride={onSpeedOverride}
             />
+            <SleepIndicator timer={sleep.sleepTimer} />
             <span className="bg-slate-800 px-2 py-1 rounded">{formatTime(currentTime)} / {formatTime(duration)}</span>
           </div>
         </div>
@@ -167,6 +184,7 @@ const PodcastPlayer: React.FC<PodcastPlayerProps> = ({
         hasSpeedOverride={hasSpeedOverride}
         onSpeed={onSpeed}
         onSpeedOverride={onSpeedOverride}
+        sleep={sleep}
         formatTime={formatTime}
         playbackError={playbackError}
         retry={retry}

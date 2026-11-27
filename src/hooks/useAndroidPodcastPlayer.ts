@@ -6,10 +6,17 @@ import { androidPlaybackOpen, androidPlaybackQueue, androidPlaybackTrack, applyA
 import { resumePoint } from '../services/driveSync';
 import type { ResumePoint } from '../services/driveSync';
 import { speedFor } from '../services/preferences';
+import type { SleepTimerControls } from '../services/sleepTimer';
 import { formatTime } from './usePodcastPlayer';
 import type { UsePodcastPlayerProps } from './usePodcastPlayer';
 
 type Command = Omit<Parameters<typeof AndroidPlayback.control>[0], 'profile'>;
+
+// TODO: Run the sleep timer in PlaybackService (a `sleep` action, plus `sleep` in its snapshot()), because the
+// WebView can be suspended. Until then Android has no sleep timer.
+const noSleepTimer: SleepTimerControls = {
+  sleepTimer: null, setSleepTimer: () => {}, extendSleepTimer: () => {}, cancelSleepTimer: () => {},
+};
 
 export function useAndroidPodcastPlayer({
   profile, ready, state, updateState, remoteSession, skipBackwardSeconds, skipForwardSeconds,
@@ -147,7 +154,7 @@ export function useAndroidPodcastPlayer({
     duration: playback?.duration ?? 0,
     playbackReady: ready && playback !== null,
     playbackError: connectionError || (playback?.error ?? false),
-    retry, togglePlay, skip, seek, formatTime, playEpisode,
+    retry, togglePlay, skip, seek, formatTime, playEpisode, ...noSleepTimer,
     audioRef: null, audioEvents: {},
   };
 }
