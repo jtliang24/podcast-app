@@ -165,7 +165,7 @@ function TranscriptView({ paragraphs, timed, currentTime, seek, formatTime }: {
   const searchId = useId();
   const [query, setQuery] = useState('');
   const [matchIndex, setMatchIndex] = useState(0);
-  // The reader scrolled (or searched) recently, so playback is not followed until `FOLLOW_PAUSE_MS` passes.
+  // The reader scrolled recently, so playback is not followed until `FOLLOW_PAUSE_MS` passes.
   const [paused, setPaused] = useState(false);
   // The reader went to a search match, so playback is not followed while the search is active.
   const [searchHold, setSearchHold] = useState(false);
