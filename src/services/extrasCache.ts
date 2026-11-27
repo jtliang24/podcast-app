@@ -15,9 +15,13 @@ import { pickTranscript, transcriptFormat } from './transcripts.ts';
  */
 
 const DB_NAME = 'podcast_episode_extras';
-const DB_VERSION = 1;
-/** Cached files (`ExtraFile`), keyed by URL. Version 1 files also have a `pinned` flag, which is ignored. */
-const FILES_STORE = 'files';
+const DB_VERSION = 2;
+/** Cached file metadata (`ExtraEntry`), keyed by URL, so eviction and recording a use never touch bodies. */
+const ENTRIES_STORE = 'entries';
+/** Cached file bodies (strings), keyed by URL. Each has an entry with the same URL. */
+const BODIES_STORE = 'bodies';
+/** Version 1 kept each body and its metadata together in this store. Upgrading drops it. */
+const LEGACY_FILES_STORE = 'files';
 /**
  * The URLs each downloaded episode pinned (`PinRecord`), keyed by episode id, so removal can unpin them. It
  * also keeps the extras of older episode copies, so they work offline without the feed.
@@ -29,16 +33,10 @@ export const MAX_UNPINNED_FILES = 100;
 /** The declared type of `podcast:chapters` files. */
 export const CHAPTERS_TYPE = 'application/json+chapters';
 
-export interface ExtraFile {
-  body: string;
-  /** The media type the feed declared. */
-  type: string;
-  fetchedAt: number;
-  lastUsed?: number;
-}
-
 export interface ExtraEntry {
   url: string;
+  /** The media type the feed declared. */
+  type: string;
   fetchedAt: number;
   lastUsed?: number;
 }
@@ -129,7 +127,11 @@ function initDB(): Promise<IDBDatabase> {
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains(FILES_STORE)) db.createObjectStore(FILES_STORE);
+      // Version 1 files are dropped rather than split: it's a cache, and a later load fetches them again. Its
+      // pin records keep the same shape, so a file they list is pinned again once it's cached.
+      if (db.objectStoreNames.contains(LEGACY_FILES_STORE)) db.deleteObjectStore(LEGACY_FILES_STORE);
+      if (!db.objectStoreNames.contains(ENTRIES_STORE)) db.createObjectStore(ENTRIES_STORE, { keyPath: 'url' });
+      if (!db.objectStoreNames.contains(BODIES_STORE)) db.createObjectStore(BODIES_STORE);
       if (!db.objectStoreNames.contains(PINS_STORE)) db.createObjectStore(PINS_STORE, { keyPath: 'id' });
     };
 
@@ -165,49 +167,51 @@ async function transact<T>(
   });
 }
 
+/** The stores a write that may evict needs. */
+const EVICTING_STORES = [ENTRIES_STORE, BODIES_STORE, PINS_STORE];
+
 /**
- * Queues eviction of unpinned files beyond the limit, in a transaction over both stores. Only metadata is
- * collected, one record at a time.
+ * Queues eviction of unpinned files beyond the limit, in a transaction over `EVICTING_STORES`. Only the
+ * entries and pin records are read; bodies are only deleted.
  */
 function evict(transaction: IDBTransaction): void {
-  const files = transaction.objectStore(FILES_STORE);
-  const count = files.count();
+  const entries = transaction.objectStore(ENTRIES_STORE);
+  const count = entries.count();
   count.onsuccess = () => {
+    // Pinned files are counted too, so this only skips the work when there can't be too many unpinned ones.
     if (count.result <= MAX_UNPINNED_FILES) return;
     const pins = transaction.objectStore(PINS_STORE).getAll();
-    const entries: ExtraEntry[] = [];
-    const cursor = files.openCursor();
-    cursor.onsuccess = () => {
-      const current = cursor.result;
-      if (current) {
-        const { fetchedAt, lastUsed } = current.value as ExtraFile;
-        entries.push({ url: String(current.key), fetchedAt, lastUsed });
-        current.continue();
-      } else {
-        // Requests complete in order, so the pins were read before the cursor finished.
-        for (const url of selectEvictions(entries, pins.result as PinRecord[])) files.delete(url);
+    const all = entries.getAll();
+    // Requests complete in order, so the pins were read before the entries.
+    all.onsuccess = () => {
+      const bodies = transaction.objectStore(BODIES_STORE);
+      for (const url of selectEvictions(all.result as ExtraEntry[], pins.result as PinRecord[])) {
+        entries.delete(url);
+        bodies.delete(url);
       }
     };
   };
 }
 
-/** Returns the cached file and records the use. */
-function touchFile(url: string): Promise<ExtraFile | undefined> {
-  return transact<ExtraFile>([FILES_STORE], 'readwrite', (transaction, result) => {
-    const files = transaction.objectStore(FILES_STORE);
-    const request = files.get(url);
-    request.onsuccess = () => {
-      const file = request.result as ExtraFile | undefined;
-      if (!file) return;
-      result.value = { ...file, lastUsed: Date.now() };
-      files.put(result.value, url);
+/** Returns the cached body and records the use, which rewrites only the file's entry. */
+function readFile(url: string): Promise<string | undefined> {
+  return transact<string>([ENTRIES_STORE, BODIES_STORE], 'readwrite', (transaction, result) => {
+    const entries = transaction.objectStore(ENTRIES_STORE);
+    const entry = entries.get(url);
+    const body = transaction.objectStore(BODIES_STORE).get(url);
+    body.onsuccess = () => {
+      const found = entry.result as ExtraEntry | undefined;
+      if (!found || typeof body.result !== 'string') return;
+      result.value = body.result;
+      entries.put({ ...found, lastUsed: Date.now() });
     };
   });
 }
 
-async function storeFile(url: string, file: ExtraFile): Promise<void> {
-  await transact([FILES_STORE, PINS_STORE], 'readwrite', transaction => {
-    transaction.objectStore(FILES_STORE).put(file, url);
+async function storeFile(entry: ExtraEntry, body: string): Promise<void> {
+  await transact(EVICTING_STORES, 'readwrite', transaction => {
+    transaction.objectStore(ENTRIES_STORE).put(entry);
+    transaction.objectStore(BODIES_STORE).put(body, entry.url);
     evict(transaction);
   });
 }
@@ -227,7 +231,7 @@ async function readPin(episodeId: string): Promise<PinRecord | undefined> {
 
 /** Deletes the pin record, which unpins every URL no other record lists, and evicts beyond the limit. */
 async function removePin(episodeId: string): Promise<void> {
-  await transact([FILES_STORE, PINS_STORE], 'readwrite', transaction => {
+  await transact(EVICTING_STORES, 'readwrite', transaction => {
     transaction.objectStore(PINS_STORE).delete(episodeId);
     evict(transaction);
   });
@@ -244,8 +248,8 @@ export async function loadExtraFile(
   { type, privateSource = false, accept = acceptFor(type) }: ExtraLoadOptions,
 ): Promise<string | null> {
   try {
-    const cached = await touchFile(url);
-    if (cached) return cached.body;
+    const cached = await readFile(url);
+    if (cached !== undefined) return cached;
   } catch (error) {
     console.warn('Could not read cached episode extras.', error);
   }
@@ -259,7 +263,7 @@ export async function loadExtraFile(
 
   const now = Date.now();
   try {
-    await storeFile(url, { body, type, fetchedAt: now, lastUsed: now });
+    await storeFile({ url, type, fetchedAt: now, lastUsed: now }, body);
   } catch (error) {
     console.warn('Could not cache episode extras.', error);
   }

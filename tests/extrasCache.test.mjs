@@ -5,10 +5,11 @@ import {
   pinnedUrls, preferredExtras, selectEvictions, unpinExtras, unpinExtrasExcept,
 } from '../src/services/extrasCache.ts';
 
-const entry = (url, lastUsed) => ({ url, fetchedAt: 0, lastUsed });
+// Eviction only sees the metadata entries and the pin records, never the bodies.
+const entry = (url, lastUsed) => ({ url, type: 'text/vtt', fetchedAt: 0, lastUsed });
 
 test('eviction removes unpinned files beyond the limit, least recently used first', () => {
-  const entries = [entry('a', 5), entry('b', 1), entry('c', 3), entry('d', 4), { url: 'e', fetchedAt: 2 }];
+  const entries = [entry('a', 5), entry('b', 1), entry('c', 3), entry('d', 4), { url: 'e', type: 'text/vtt', fetchedAt: 2 }];
   const pins = [{ id: 'e1', urls: ['c'] }];
   assert.deepEqual(selectEvictions(entries, pins, 2), ['e', 'b']);
   assert.deepEqual(selectEvictions(entries, pins, 4), []);
