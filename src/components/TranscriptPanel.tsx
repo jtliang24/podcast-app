@@ -5,7 +5,10 @@ import { activeParagraph, findMatches } from '../services/transcripts';
 import type { Segment, TranscriptMatch } from '../services/transcripts';
 import type { TranscriptState } from '../hooks/useTranscript';
 
-/** How long after the reader scrolls (or jumps to a search match) the transcript stops following playback. */
+/**
+ * How long after the reader scrolls the transcript stops following playback. Going to a search match stops it
+ * until the search is cleared or **Jump to current** is pressed.
+ */
 const FOLLOW_PAUSE_MS = 5000;
 /** Keys that scroll the transcript when it (or a row in it) has focus. */
 const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
@@ -164,6 +167,8 @@ function TranscriptView({ paragraphs, timed, currentTime, seek, formatTime }: {
   const [matchIndex, setMatchIndex] = useState(0);
   // The reader scrolled (or searched) recently, so playback is not followed until `FOLLOW_PAUSE_MS` passes.
   const [paused, setPaused] = useState(false);
+  // The reader went to a search match, so playback is not followed while the search is active.
+  const [searchHold, setSearchHold] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const pauseTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const seekRef = useRef(seek);
@@ -171,7 +176,7 @@ function TranscriptView({ paragraphs, timed, currentTime, seek, formatTime }: {
 
   const synced = timed && currentTime !== undefined && seek !== undefined;
   const active = synced ? activeParagraph(paragraphs, currentTime) : -1;
-  const following = synced && !paused;
+  const following = synced && !paused && !searchHold;
   const followRef = useRef({ active, following });
   followRef.current = { active, following };
 
@@ -199,6 +204,7 @@ function TranscriptView({ paragraphs, timed, currentTime, seek, formatTime }: {
   const resumeFollowing = useCallback(() => {
     clearTimeout(pauseTimer.current);
     setPaused(false);
+    setSearchHold(false);
   }, []);
   useEffect(() => () => clearTimeout(pauseTimer.current), []);
 
@@ -225,13 +231,13 @@ function TranscriptView({ paragraphs, timed, currentTime, seek, formatTime }: {
     return () => observer.disconnect();
   }, [scrollToParagraph]);
 
-  // Going to a search match pauses following, like scrolling does.
+  // Going to a search match pauses following until the search is cleared, so the reader can stay on it.
   useEffect(() => {
     const container = containerRef.current;
     if (!currentMatch || !container) return;
-    pauseFollowing();
+    setSearchHold(true);
     scrollWithin(container, () => container.querySelector<HTMLElement>('mark[data-current]'), false);
-  }, [currentMatch, pauseFollowing]);
+  }, [currentMatch]);
 
   const onSelect = useCallback((time: number) => {
     resumeFollowing();
@@ -266,8 +272,10 @@ function TranscriptView({ paragraphs, timed, currentTime, seek, formatTime }: {
           placeholder="Search transcript"
           autoComplete="off"
           onChange={event => {
-            setQuery(event.currentTarget.value);
+            const value = event.currentTarget.value;
+            setQuery(value);
             setMatchIndex(0);
+            if (!value.trim()) setSearchHold(false);
           }}
           onKeyDown={onSearchKey}
           className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-blue-400 focus:outline-none"
@@ -307,7 +315,7 @@ function TranscriptView({ paragraphs, timed, currentTime, seek, formatTime }: {
             onSelect={synced ? onSelect : undefined}
           />
         </div>
-        {synced && paused && active >= 0 && (
+        {synced && (paused || searchHold) && active >= 0 && (
           <button
             type="button"
             onClick={resumeFollowing}
