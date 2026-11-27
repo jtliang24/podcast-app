@@ -5,6 +5,7 @@ import { resumePoint } from '../services/driveSync';
 import type { ResumePoint } from '../services/driveSync';
 import type { StateUpdate } from '../services/profileChanges';
 import { recordPodcastPlay } from '../services/subscriptionSort';
+import { speedFor } from '../services/preferences';
 import { nextEpisode, removeQueuedEpisode } from '../services/playbackQueue';
 
 export interface UsePodcastPlayerProps {
@@ -50,10 +51,24 @@ export function usePodcastPlayer({
   const selected = useRef<Selection | null>(null);
   const initialized = useRef(false);
   const offer = remoteOffer ?? resumePoint(state);
+  const speed = speedFor(state, currentEpisode?.podcastId);
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
 
   useEffect(() => {
     setRemoteOffer(remoteSession);
   }, [remoteSession]);
+
+  // Keep the lock screen's progress bar in step with the audio element. Positions are in media time.
+  const updatePositionState = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !selected.current?.positioned || !('mediaSession' in navigator)) return;
+    const { duration: length, currentTime: position, playbackRate } = audio;
+    if (!Number.isFinite(length) || length <= 0 || position > length) return;
+    try {
+      navigator.mediaSession.setPositionState({ duration: length, position, playbackRate });
+    } catch { /* Position state unavailable on this platform. */ }
+  }, []);
 
   const checkpoint = useCallback((urgent: boolean, { started = false, time: seekTime, consume = false }: {
     started?: boolean; time?: number; consume?: boolean;
@@ -112,6 +127,9 @@ export function usePodcastPlayer({
       item.source = blob ? URL.createObjectURL(blob) : episode.audioUrl;
       if (!item.source) { setPlaybackError(true); return; }
       audio.src = item.source;
+      // load() resets the rate to the default rate, so set both.
+      audio.defaultPlaybackRate = speedRef.current;
+      audio.playbackRate = speedRef.current;
       audio.load();
       if (item.autoplay) requestPlay();
     };
@@ -143,6 +161,7 @@ export function usePodcastPlayer({
     audio.currentTime = length > 0 ? Math.min(item.time, length) : item.time;
     item.positioned = true;
     setCurrentTime(audio.currentTime);
+    updatePositionState();
   };
 
   const onPlaying = () => {
@@ -150,6 +169,7 @@ export function usePodcastPlayer({
     if (!item || audioRef.current?.paused) return;
     setIsPlaying(true);
     setPlaybackError(false);
+    updatePositionState();
     if (!item.started) checkpoint(true, { started: true, consume: true });
     item.started = true;
   };
@@ -158,6 +178,7 @@ export function usePodcastPlayer({
     const item = selected.current;
     if (!audioRef.current?.paused) return;
     setIsPlaying(false);
+    updatePositionState();
     if (item?.started) {
       checkpoint(true);
       item.started = false;
@@ -202,8 +223,9 @@ export function usePodcastPlayer({
     if (item.positioned) audio.currentTime = target;
     // A seek during source loading is applied again when metadata becomes available.
     setCurrentTime(target);
+    updatePositionState();
     checkpoint(true, { time: target });
-  }, [ready, checkpoint]);
+  }, [ready, checkpoint, updatePositionState]);
   const skip = useCallback((seconds: number) => {
     const item = selected.current;
     const time = item?.positioned ? audioRef.current?.currentTime : item?.time;
@@ -235,6 +257,15 @@ export function usePodcastPlayer({
       setCurrentTime(audio.currentTime);
     }
   };
+
+  // Apply the current podcast's speed, including after a settings change.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.defaultPlaybackRate = speed;
+    audio.playbackRate = speed;
+    updatePositionState();
+  }, [speed, updatePositionState]);
 
   // Slow DISK updates
   useEffect(() => {
