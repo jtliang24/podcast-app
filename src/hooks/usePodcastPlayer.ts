@@ -53,8 +53,9 @@ export function usePodcastPlayer({
   const initialized = useRef(false);
   const offer = remoteOffer ?? resumePoint(state);
   const speed = speedFor(state, currentEpisode?.podcastId);
-  const speedRef = useRef(speed);
-  speedRef.current = speed;
+  // Read by `select`, which can attach a new episode before its podcast's speed reaches `speed`.
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
     setRemoteOffer(remoteSession);
@@ -146,8 +147,9 @@ export function usePodcastPlayer({
       if (!item.source) { setPlaybackError(true); return; }
       audio.src = item.source;
       // load() resets the rate to the default rate, so set both.
-      audio.defaultPlaybackRate = speedRef.current;
-      audio.playbackRate = speedRef.current;
+      const rate = speedFor(stateRef.current, episode.podcastId);
+      audio.defaultPlaybackRate = rate;
+      audio.playbackRate = rate;
       audio.load();
       if (item.autoplay) requestPlay();
     };
