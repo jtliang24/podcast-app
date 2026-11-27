@@ -95,12 +95,17 @@ export function useSleepTimer(audioRef: RefObject<HTMLAudioElement | null>, paus
     else if (shouldStop(timer.current, { now: Date.now(), position, episodeId })) fire();
   }, [fire, stepFade]);
 
-  /** Call from `onPause`. Pausing mid-fade, from the UI or elsewhere, ends the timer at full volume. */
-  const onSleepPause = useCallback(() => {
-    if (!fade.current || audioRef.current?.ended) return;
+  /** Call before changing episodes. A timer that is fading out ends at full volume; other timers keep running. */
+  const cancelSleepFade = useCallback(() => {
+    if (!fade.current) return;
     abortFade();
     update(null);
-  }, [abortFade, audioRef, update]);
+  }, [abortFade, update]);
+
+  /** Call from `onPause`. Pausing mid-fade, from the UI or elsewhere, ends the timer at full volume. */
+  const onSleepPause = useCallback(() => {
+    if (!audioRef.current?.ended) cancelSleepFade();
+  }, [audioRef, cancelSleepFade]);
 
   /**
    * Call when an episode ends. Returns whether the next episode should load paused: for "end of episode", a
@@ -118,7 +123,7 @@ export function useSleepTimer(audioRef: RefObject<HTMLAudioElement | null>, paus
   }, [abortFade, update]);
 
   const controls: SleepTimerControls = { sleepTimer, setSleepTimer, extendSleepTimer, cancelSleepTimer };
-  return { controls, checkSleepTimer, onSleepPause, endSleepTimerWithEpisode };
+  return { controls, checkSleepTimer, onSleepPause, cancelSleepFade, endSleepTimerWithEpisode };
 }
 
 /** The sleep button's label, or null without a timer. Re-renders about once a second while a `time` timer runs. */

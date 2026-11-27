@@ -95,6 +95,21 @@ export function usePodcastPlayer({
     }), urgent, !urgent);
   }, [updateState]);
 
+  const pause = useCallback(() => {
+    if (selected.current) selected.current.autoplay = false;
+    audioRef.current?.pause();
+    // Persist explicit pauses before the browser can suspend the page.
+    if (selected.current?.started) {
+      setRemoteOffer(null);
+      checkpoint(true);
+      selected.current.started = false;
+    }
+  }, [checkpoint]);
+
+  const {
+    controls: sleep, checkSleepTimer, onSleepPause, cancelSleepFade, endSleepTimerWithEpisode,
+  } = useSleepTimer(audioRef, pause);
+
   const requestPlay = useCallback(() => {
     const item = selected.current;
     if (!ready || !item || item.ending) return;
@@ -108,6 +123,8 @@ export function usePodcastPlayer({
   const select = useCallback((episode: Episode, time: number, autoplay: boolean) => {
     const audio = audioRef.current;
     if (!ready || !audio) return;
+    // Changing episodes mid-fade ends the sleep timer at full volume, as pausing does.
+    cancelSleepFade();
     const old = selected.current;
     if (old?.started && old.episode.audioUrl !== episode.audioUrl) checkpoint(true);
     if (old) old.started = false;
@@ -139,7 +156,7 @@ export function usePodcastPlayer({
     } else {
       attach(null);
     }
-  }, [ready, checkpoint, downloadsReady, downloadedEpisodes, requestPlay]);
+  }, [ready, checkpoint, cancelSleepFade, downloadsReady, downloadedEpisodes, requestPlay]);
 
   // Initialize from state when it loads
   useEffect(() => {
@@ -186,19 +203,6 @@ export function usePodcastPlayer({
       item.started = false;
     }
   };
-
-  const pause = useCallback(() => {
-    if (selected.current) selected.current.autoplay = false;
-    audioRef.current?.pause();
-    // Persist explicit pauses before the browser can suspend the page.
-    if (selected.current?.started) {
-      setRemoteOffer(null);
-      checkpoint(true);
-      selected.current.started = false;
-    }
-  }, [checkpoint]);
-
-  const { controls: sleep, checkSleepTimer, onSleepPause, endSleepTimerWithEpisode } = useSleepTimer(audioRef, pause);
 
   const retry = useCallback(() => {
     const item = selected.current;
