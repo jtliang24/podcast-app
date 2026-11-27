@@ -8,11 +8,15 @@ import { pickTranscript, transcriptFormat } from './transcripts.ts';
  * Per-device cache of chapter and transcript files. It lives in its own IndexedDB database, never in
  * `AppState`, so the files don't sync. Files for downloaded episodes are pinned so they work offline; other
  * files are evicted least recently used first. Every exported function is best effort and never rejects.
+ *
+ * A file is pinned exactly while some pin record lists its URL. There is no separate flag to set or clear,
+ * so a crash can't leave a file pinned forever, and a URL shared by several downloads stays pinned until the
+ * last of them is removed.
  */
 
 const DB_NAME = 'podcast_episode_extras';
 const DB_VERSION = 1;
-/** Cached files (`ExtraFile`), keyed by URL. */
+/** Cached files (`ExtraFile`), keyed by URL. Version 1 files also have a `pinned` flag, which is ignored. */
 const FILES_STORE = 'files';
 /**
  * The URLs each downloaded episode pinned (`PinRecord`), keyed by episode id, so removal can unpin them. It
@@ -30,18 +34,16 @@ export interface ExtraFile {
   /** The media type the feed declared. */
   type: string;
   fetchedAt: number;
-  pinned: boolean;
   lastUsed?: number;
 }
 
 export interface ExtraEntry {
   url: string;
-  pinned: boolean;
   fetchedAt: number;
   lastUsed?: number;
 }
 
-interface PinRecord {
+export interface PinRecord {
   id: string;
   urls: string[];
   /** The extras `resolveExtras` found for an episode copy that lacks them. */
@@ -54,8 +56,6 @@ export interface ExtraLoadOptions {
   /** Limits the request to a direct fetch: no public proxies. */
   privateSource?: boolean;
   accept?: string;
-  /** Keeps the file until `unpinExtras`; an already pinned file stays pinned either way. */
-  pinned?: boolean;
 }
 
 // Pure helpers
@@ -90,19 +90,26 @@ export function acceptFor(type: string): string | undefined {
 
 const recency = (entry: ExtraEntry) => entry.lastUsed ?? entry.fetchedAt;
 
-/** The URLs to evict: unpinned entries beyond `limit`, least recently used first. Pinned entries stay. */
-export function selectEvictions(entries: readonly ExtraEntry[], limit = MAX_UNPINNED_FILES): string[] {
+/** The URLs some pin record lists, which are exactly the pinned files. */
+export function pinnedUrls(pins: readonly Pick<PinRecord, 'urls'>[]): Set<string> {
+  return new Set(pins.flatMap(pin => pin.urls));
+}
+
+/**
+ * The URLs to evict: unpinned entries beyond `limit`, least recently used first. Entries a pin in `pins`
+ * lists stay.
+ */
+export function selectEvictions(
+  entries: readonly ExtraEntry[],
+  pins: readonly Pick<PinRecord, 'urls'>[],
+  limit = MAX_UNPINNED_FILES,
+): string[] {
+  const pinned = pinnedUrls(pins);
   return entries
-    .filter(entry => !entry.pinned)
+    .filter(entry => !pinned.has(entry.url))
     .sort((a, b) => recency(b) - recency(a) || (a.url < b.url ? -1 : a.url > b.url ? 1 : 0))
     .slice(limit)
     .map(entry => entry.url);
-}
-
-/** The URLs a removed pin releases: those no remaining pin still holds. */
-export function urlsToRelease(urls: readonly string[], remaining: readonly { urls: readonly string[] }[]): string[] {
-  const held = new Set(remaining.flatMap(pin => pin.urls));
-  return [...new Set(urls)].filter(url => !held.has(url));
 }
 
 /** The files to keep offline for a downloaded episode: its chapters and its preferred transcript. */
@@ -158,49 +165,50 @@ async function transact<T>(
   });
 }
 
-/** Queues eviction of unpinned files beyond the limit. Only metadata is collected, one record at a time. */
-function evict(files: IDBObjectStore): void {
+/**
+ * Queues eviction of unpinned files beyond the limit, in a transaction over both stores. Only metadata is
+ * collected, one record at a time.
+ */
+function evict(transaction: IDBTransaction): void {
+  const files = transaction.objectStore(FILES_STORE);
   const count = files.count();
   count.onsuccess = () => {
     if (count.result <= MAX_UNPINNED_FILES) return;
+    const pins = transaction.objectStore(PINS_STORE).getAll();
     const entries: ExtraEntry[] = [];
     const cursor = files.openCursor();
     cursor.onsuccess = () => {
       const current = cursor.result;
       if (current) {
-        const { pinned, fetchedAt, lastUsed } = current.value as ExtraFile;
-        entries.push({ url: String(current.key), pinned, fetchedAt, lastUsed });
+        const { fetchedAt, lastUsed } = current.value as ExtraFile;
+        entries.push({ url: String(current.key), fetchedAt, lastUsed });
         current.continue();
       } else {
-        for (const url of selectEvictions(entries)) files.delete(url);
+        // Requests complete in order, so the pins were read before the cursor finished.
+        for (const url of selectEvictions(entries, pins.result as PinRecord[])) files.delete(url);
       }
     };
   };
 }
 
-/** Returns the cached file and records the use, pinning it when asked. */
-function touchFile(url: string, pinned: boolean): Promise<ExtraFile | undefined> {
+/** Returns the cached file and records the use. */
+function touchFile(url: string): Promise<ExtraFile | undefined> {
   return transact<ExtraFile>([FILES_STORE], 'readwrite', (transaction, result) => {
     const files = transaction.objectStore(FILES_STORE);
     const request = files.get(url);
     request.onsuccess = () => {
       const file = request.result as ExtraFile | undefined;
       if (!file) return;
-      result.value = { ...file, pinned: file.pinned || pinned, lastUsed: Date.now() };
+      result.value = { ...file, lastUsed: Date.now() };
       files.put(result.value, url);
     };
   });
 }
 
 async function storeFile(url: string, file: ExtraFile): Promise<void> {
-  await transact([FILES_STORE], 'readwrite', transaction => {
-    const files = transaction.objectStore(FILES_STORE);
-    const request = files.get(url);
-    request.onsuccess = () => {
-      const existing = request.result as ExtraFile | undefined;
-      files.put({ ...file, pinned: file.pinned || !!existing?.pinned }, url);
-      evict(files);
-    };
+  await transact([FILES_STORE, PINS_STORE], 'readwrite', transaction => {
+    transaction.objectStore(FILES_STORE).put(file, url);
+    evict(transaction);
   });
 }
 
@@ -217,26 +225,11 @@ async function readPin(episodeId: string): Promise<PinRecord | undefined> {
   });
 }
 
+/** Deletes the pin record, which unpins every URL no other record lists, and evicts beyond the limit. */
 async function removePin(episodeId: string): Promise<void> {
   await transact([FILES_STORE, PINS_STORE], 'readwrite', transaction => {
-    const files = transaction.objectStore(FILES_STORE);
-    const pins = transaction.objectStore(PINS_STORE);
-    const request = pins.get(episodeId);
-    request.onsuccess = () => {
-      const pin = request.result as PinRecord | undefined;
-      if (!pin) return;
-      pins.delete(episodeId);
-      const remaining = pins.getAll();
-      remaining.onsuccess = () => {
-        for (const url of urlsToRelease(pin.urls, remaining.result as PinRecord[])) {
-          const file = files.get(url);
-          file.onsuccess = () => {
-            if (file.result) files.put({ ...(file.result as ExtraFile), pinned: false }, url);
-          };
-        }
-        evict(files);
-      };
-    };
+    transaction.objectStore(PINS_STORE).delete(episodeId);
+    evict(transaction);
   });
 }
 
@@ -248,10 +241,10 @@ async function removePin(episodeId: string): Promise<void> {
  */
 export async function loadExtraFile(
   url: string,
-  { type, privateSource = false, accept = acceptFor(type), pinned = false }: ExtraLoadOptions,
+  { type, privateSource = false, accept = acceptFor(type) }: ExtraLoadOptions,
 ): Promise<string | null> {
   try {
-    const cached = await touchFile(url, pinned);
+    const cached = await touchFile(url);
     if (cached) return cached.body;
   } catch (error) {
     console.warn('Could not read cached episode extras.', error);
@@ -266,7 +259,7 @@ export async function loadExtraFile(
 
   const now = Date.now();
   try {
-    await storeFile(url, { body, type, fetchedAt: now, lastUsed: now, pinned });
+    await storeFile(url, { body, type, fetchedAt: now, lastUsed: now });
   } catch (error) {
     console.warn('Could not cache episode extras.', error);
   }
@@ -314,6 +307,9 @@ export async function storedExtras(episodeId: string): Promise<EpisodeExtras | u
  * Caches and pins a downloaded episode's chapters and preferred transcript so they work offline. Older
  * episode copies get their extras through `lookupExtras`, and those are kept with the pin so the episode
  * finds its files offline too.
+ *
+ * The pin record is written before the files are fetched, so they are pinned as soon as they are cached. A
+ * file that can't be fetched now stays listed and is pinned when a later load caches it.
  */
 export function pinExtras(episode: Episode): Promise<void> {
   return serialize(episode.id, async () => {
@@ -322,10 +318,9 @@ export function pinExtras(episode: Episode): Promise<void> {
     const language = typeof navigator === 'undefined' ? undefined : navigator.language;
     const wanted = preferredExtras(resolved, language);
     if (!wanted.length && !extras) return;
+    await savePin({ id: episode.id, urls: wanted.map(file => file.url), extras });
     const privateSource = isPrivateExtraSource(episode.podcastId);
-    const loaded = await Promise.all(wanted.map(({ url, type }) => loadExtraFile(url, { type, privateSource, pinned: true })));
-    const urls = wanted.filter((_, index) => loaded[index] !== null).map(file => file.url);
-    if (urls.length || extras) await savePin({ id: episode.id, urls, extras });
+    await Promise.all(wanted.map(({ url, type }) => loadExtraFile(url, { type, privateSource })));
   });
 }
 

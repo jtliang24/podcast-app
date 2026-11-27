@@ -2,23 +2,25 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   acceptFor, CHAPTERS_TYPE, isPrivateExtraSource, loadEpisodeExtra, loadExtraFile, MAX_UNPINNED_FILES, pinExtras,
-  preferredExtras, selectEvictions, unpinExtras, unpinExtrasExcept, urlsToRelease,
+  pinnedUrls, preferredExtras, selectEvictions, unpinExtras, unpinExtrasExcept,
 } from '../src/services/extrasCache.ts';
 
-const entry = (url, lastUsed, pinned = false) => ({ url, pinned, fetchedAt: 0, lastUsed });
+const entry = (url, lastUsed) => ({ url, fetchedAt: 0, lastUsed });
 
 test('eviction removes unpinned files beyond the limit, least recently used first', () => {
-  const entries = [entry('a', 5), entry('b', 1), entry('c', 3, true), entry('d', 4), { url: 'e', pinned: false, fetchedAt: 2 }];
-  assert.deepEqual(selectEvictions(entries, 2), ['e', 'b']);
-  assert.deepEqual(selectEvictions(entries, 4), []);
-  assert.deepEqual(selectEvictions(entries, 0), ['a', 'd', 'e', 'b']);
-  assert.deepEqual(selectEvictions([entry('y', 1), entry('x', 1)], 1), ['y'], 'ties break by URL');
+  const entries = [entry('a', 5), entry('b', 1), entry('c', 3), entry('d', 4), { url: 'e', fetchedAt: 2 }];
+  const pins = [{ id: 'e1', urls: ['c'] }];
+  assert.deepEqual(selectEvictions(entries, pins, 2), ['e', 'b']);
+  assert.deepEqual(selectEvictions(entries, pins, 4), []);
+  assert.deepEqual(selectEvictions(entries, pins, 0), ['a', 'd', 'e', 'b']);
+  assert.deepEqual(selectEvictions([entry('y', 1), entry('x', 1)], [], 1), ['y'], 'ties break by URL');
 });
 
 test('pinned files never count toward the default limit', () => {
-  const pinned = Array.from({ length: 300 }, (_, i) => entry(`p${i}`, i, true));
+  const pinned = Array.from({ length: 300 }, (_, i) => entry(`p${i}`, i));
   const unpinned = Array.from({ length: MAX_UNPINNED_FILES + 2 }, (_, i) => entry(`u${i}`, i));
-  assert.deepEqual(selectEvictions([...pinned, ...unpinned]), ['u1', 'u0']);
+  const pins = [{ id: 'e1', urls: pinned.map(file => file.url) }];
+  assert.deepEqual(selectEvictions([...pinned, ...unpinned], pins), ['u1', 'u0']);
 });
 
 test('accept headers only use types Android native HTTP allows', () => {
@@ -40,9 +42,16 @@ test('extras of private Substack feeds are private sources', () => {
   assert.equal(isPrivateExtraSource('not a url'), false);
 });
 
-test('a removed pin releases only URLs no other pin holds', () => {
-  assert.deepEqual(urlsToRelease(['a', 'b', 'a'], [{ urls: ['b', 'c'] }]), ['a']);
-  assert.deepEqual(urlsToRelease(['a'], []), ['a']);
+test('a file is pinned while any pin record lists it', () => {
+  const a = { id: 'a', urls: ['shared', 'only-a'] };
+  const b = { id: 'b', urls: ['shared', 'only-b'] };
+  assert.deepEqual([...pinnedUrls([a, b])].sort(), ['only-a', 'only-b', 'shared']);
+  assert.deepEqual([...pinnedUrls([a])].sort(), ['only-a', 'shared'], 'removing one pin keeps a shared URL pinned');
+  assert.deepEqual(pinnedUrls([]).size, 0);
+  // Removing b's record releases only-b without touching anything a lists, even before a's files are cached.
+  const files = ['shared', 'only-a', 'only-b'].map((url, i) => entry(url, i));
+  assert.deepEqual(selectEvictions(files, [a], 0), ['only-b']);
+  assert.deepEqual(selectEvictions(files, [a, b], 0), []);
 });
 
 const episode = { id: 'e1', podcastId: 'https://feed.example/show.rss', title: 'e1', pubDate: '', audioUrl: 'https://a.example/e1.mp3', duration: 0, description: '' };
