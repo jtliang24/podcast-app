@@ -7,10 +7,30 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 final class NativeRequests {
+    static final String FEED_ACCEPT = "application/rss+xml, application/xml, text/xml, application/json";
+    private static final Set<String> ACCEPT_TYPES = Set.of(
+        "application/rss+xml", "application/xml", "text/xml", "application/json",
+        "text/vtt", "application/x-subrip", "application/srt", "text/html", "text/plain");
+
     private NativeRequests() {}
+
+    /** Returns the feed default when absent; otherwise only allowlisted media types, never the raw string. */
+    static String acceptHeader(String requested) {
+        if (requested == null || requested.isBlank()) return FEED_ACCEPT;
+        List<String> types = new ArrayList<>();
+        for (String part : requested.split(",")) {
+            String type = part.trim().toLowerCase(Locale.ROOT);
+            if (!ACCEPT_TYPES.contains(type)) throw new IllegalArgumentException("Unsupported content type");
+            if (!types.contains(type)) types.add(type);
+        }
+        return String.join(", ", types);
+    }
 
     static URI httpsUri(String value) {
         URI uri = URI.create(value);

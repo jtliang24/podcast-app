@@ -4,6 +4,7 @@ import { isPrivateSubstackFeed, isSubstackHost, substackFeedEndpoint, substackFe
 import { AndroidHttp, isAndroid } from './android.ts';
 
 const FEED_REQUEST_TIMEOUT_MS = 10_000;
+const FEED_ACCEPT = 'application/rss+xml, application/xml, text/xml, application/json';
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -31,6 +32,12 @@ function feedSources(url: URL): { name: string, url: string, request?: RequestIn
     }];
   }
 
+  return publicSources(url);
+}
+
+/** The publisher first, then (on the web) public CORS proxies. */
+function publicSources(url: URL): { name: string, url: string, request?: RequestInit }[] {
+  const sources = [{ name: 'Publisher', url: url.href }];
   if (isAndroid) return sources;
 
   const encodedUrl = encodeURIComponent(url.href);
@@ -45,80 +52,53 @@ function feedSources(url: URL): { name: string, url: string, request?: RequestIn
   return sources;
 }
 
-export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podcast, episodes: Episode[] }> {
-  const url = new URL(feedUrl);
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new Error('Podcast feeds must use HTTP or HTTPS');
-  }
+interface SourceOptions {
+  privateNative: boolean;
+  accept: string;
+  /** Web requests only send an Accept header when the caller asked for one. */
+  sendAccept: boolean;
+  deniedMessage: string;
+  privateMessage: string;
+  relayMessage: string;
+  failureMessage: string;
+}
 
+/**
+ * Tries each source in order and returns the first one `read` accepts. A source that fails, times out, or
+ * is rejected by `read` falls through to the next, except private Substack sources, which fail with a
+ * PrivateFeedError that never includes the private URL.
+ */
+async function loadFromSources<T>(
+  sources: { name: string, url: string, request?: RequestInit }[],
+  options: SourceOptions,
+  read: (text: string) => T,
+): Promise<T> {
   const errors: Error[] = [];
-  const privateNative = isAndroid && isPrivateSubstackFeed(url);
-  for (const source of feedSources(url)) {
+  const { privateNative } = options;
+  for (const source of sources) {
     const controller = new AbortController();
     const relay = source.url === substackFeedEndpoint;
     const timeout = setTimeout(() => controller.abort(), relay ? 30_000 : FEED_REQUEST_TIMEOUT_MS);
     try {
-      const native = isAndroid ? await AndroidHttp.get({ url: source.url, privateFeed: privateNative }) : null;
+      const native = isAndroid ? await AndroidHttp.get({ url: source.url, privateFeed: privateNative, accept: options.accept }) : null;
+      const request = options.sendAccept
+        ? { ...source.request, headers: { Accept: options.accept, ...source.request?.headers } }
+        : source.request;
       const response = native ? new Response(native.body || null, { status: native.status }) : await fetch(source.url, {
-        ...source.request,
+        ...request,
         credentials: 'omit',
         signal: controller.signal,
       });
       if ((relay || privateNative) && [401, 403, 410].includes(response.status)) {
-        throw new PrivateFeedError('Substack denied access. Copy your current private podcast feed URL from your subscription settings and try again.');
+        throw new PrivateFeedError(options.deniedMessage);
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      
-      const xmlText = await response.text();
-      const result = xmlParser.parse(xmlText);
-      const channel = result.rss?.channel;
 
-      if (!isXmlRecord(channel)) {
-        throw new Error('Invalid RSS feed');
-      }
-
-      const podcast: Podcast = {
-        id: feedUrl,
-        title: readXmlText(channel.title) || 'Unknown Title',
-        author: readXmlText(channel['itunes:author']) || readXmlText(channel.author) || 'Unknown Author',
-        feedUrl: feedUrl,
-        artworkUrl: readXmlText(isXmlRecord(channel['itunes:image']) ? channel['itunes:image']['@_href'] : undefined)
-          || readXmlText(isXmlRecord(channel.image) ? channel.image.url : undefined),
-        description: readXmlText(channel.description),
-      };
-
-      const items: unknown[] = Array.isArray(channel.item) ? channel.item : [channel.item];
-      const episodes: Episode[] = [];
-      for (const [index, item] of items.entries()) {
-        if (!isXmlRecord(item)) continue;
-
-        const enclosures = Array.isArray(item.enclosure) ? item.enclosure : [item.enclosure];
-        const enclosure = enclosures.find(value => isXmlRecord(value) && readXmlText(value['@_url']));
-        const audioUrl = isXmlRecord(enclosure) ? readXmlText(enclosure['@_url']) : '';
-        const title = readXmlText(item.title) || 'Untitled Episode';
-        const pubDate = readXmlText(item.pubDate);
-        const keywordNodes = Array.isArray(item['itunes:keywords'])
-          ? item['itunes:keywords']
-          : [item['itunes:keywords']];
-
-        episodes.push({
-          id: readXmlText(item.guid) || readXmlText(item.link) || audioUrl || JSON.stringify([feedUrl, title, pubDate, index]),
-          podcastId: feedUrl,
-          title,
-          pubDate,
-          audioUrl,
-          duration: parseDuration(readXmlText(item['itunes:duration'])),
-          description: readXmlText(item.description) || readXmlText(item['content:encoded']),
-          keywords: keywordNodes.flatMap(node => readXmlText(node).split(','))
-            .map(keyword => keyword.trim()).filter(Boolean),
-        });
-      }
-
-      return { podcast, episodes };
+      return read(await response.text());
     } catch (err) {
       if (err instanceof PrivateFeedError) throw err;
-      if (privateNative) throw new PrivateFeedError('Could not load the private Substack feed. Check your private RSS link and try again.');
-      if (relay) throw new PrivateFeedError('Could not load the private Substack feed. Check your private RSS link and that the app’s feed relay is available.');
+      if (privateNative) throw new PrivateFeedError(options.privateMessage);
+      if (relay) throw new PrivateFeedError(options.relayMessage);
       errors.push(new Error(
         `${source.name}: ${controller.signal.aborted ? 'Request timed out' : err instanceof Error ? err.message : 'Request failed'}`,
       ));
@@ -127,7 +107,98 @@ export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podc
     }
   }
 
-  throw new AggregateError(errors, 'Failed to load podcast feed');
+  throw new AggregateError(errors, options.failureMessage);
+}
+
+/**
+ * Fetches a remote text file (chapters, transcripts) the way feeds are fetched: the publisher first, then
+ * public proxies on the web. `privateSource` limits the request to a direct fetch (or native HTTP on
+ * Android) and never uses a proxy or relay. `accept` defaults to the feed types.
+ */
+export async function fetchRemoteText(
+  url: string,
+  { privateSource = false, accept }: { privateSource?: boolean, accept?: string } = {},
+): Promise<string> {
+  const target = new URL(url);
+  if (target.protocol !== 'https:' && target.protocol !== 'http:') throw new Error('Remote files must use HTTP or HTTPS');
+  if (privateSource && target.protocol !== 'https:') throw new PrivateFeedError('Private files must use HTTPS.');
+
+  return loadFromSources(
+    privateSource ? [{ name: 'Publisher', url: target.href }] : publicSources(target),
+    {
+      privateNative: isAndroid && privateSource,
+      accept: accept ?? FEED_ACCEPT,
+      sendAccept: accept !== undefined,
+      deniedMessage: 'Access to the private file was denied.',
+      privateMessage: 'Could not load the private file.',
+      relayMessage: 'Could not load the private file.',
+      failureMessage: 'Failed to load remote file',
+    },
+    text => text,
+  );
+}
+
+export async function fetchPodcastFeed(feedUrl: string): Promise<{ podcast: Podcast, episodes: Episode[] }> {
+  const url = new URL(feedUrl);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('Podcast feeds must use HTTP or HTTPS');
+  }
+
+  return loadFromSources(feedSources(url), {
+    privateNative: isAndroid && isPrivateSubstackFeed(url),
+    accept: FEED_ACCEPT,
+    sendAccept: false,
+    deniedMessage: 'Substack denied access. Copy your current private podcast feed URL from your subscription settings and try again.',
+    privateMessage: 'Could not load the private Substack feed. Check your private RSS link and try again.',
+    relayMessage: 'Could not load the private Substack feed. Check your private RSS link and that the app’s feed relay is available.',
+    failureMessage: 'Failed to load podcast feed',
+  }, xmlText => {
+    const result = xmlParser.parse(xmlText);
+    const channel = result.rss?.channel;
+
+    if (!isXmlRecord(channel)) {
+      throw new Error('Invalid RSS feed');
+    }
+
+    const podcast: Podcast = {
+      id: feedUrl,
+      title: readXmlText(channel.title) || 'Unknown Title',
+      author: readXmlText(channel['itunes:author']) || readXmlText(channel.author) || 'Unknown Author',
+      feedUrl: feedUrl,
+      artworkUrl: readXmlText(isXmlRecord(channel['itunes:image']) ? channel['itunes:image']['@_href'] : undefined)
+        || readXmlText(isXmlRecord(channel.image) ? channel.image.url : undefined),
+      description: readXmlText(channel.description),
+    };
+
+    const items: unknown[] = Array.isArray(channel.item) ? channel.item : [channel.item];
+    const episodes: Episode[] = [];
+    for (const [index, item] of items.entries()) {
+      if (!isXmlRecord(item)) continue;
+
+      const enclosures = Array.isArray(item.enclosure) ? item.enclosure : [item.enclosure];
+      const enclosure = enclosures.find(value => isXmlRecord(value) && readXmlText(value['@_url']));
+      const audioUrl = isXmlRecord(enclosure) ? readXmlText(enclosure['@_url']) : '';
+      const title = readXmlText(item.title) || 'Untitled Episode';
+      const pubDate = readXmlText(item.pubDate);
+      const keywordNodes = Array.isArray(item['itunes:keywords'])
+        ? item['itunes:keywords']
+        : [item['itunes:keywords']];
+
+      episodes.push({
+        id: readXmlText(item.guid) || readXmlText(item.link) || audioUrl || JSON.stringify([feedUrl, title, pubDate, index]),
+        podcastId: feedUrl,
+        title,
+        pubDate,
+        audioUrl,
+        duration: parseDuration(readXmlText(item['itunes:duration'])),
+        description: readXmlText(item.description) || readXmlText(item['content:encoded']),
+        keywords: keywordNodes.flatMap(node => readXmlText(node).split(','))
+          .map(keyword => keyword.trim()).filter(Boolean),
+      });
+    }
+
+    return { podcast, episodes };
+  });
 }
 
 function isXmlRecord(value: unknown): value is Record<string, unknown> {

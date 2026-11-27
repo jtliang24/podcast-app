@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchPodcastFeed, PrivateFeedError } from '../src/services/podcastService.ts';
+import { fetchPodcastFeed, fetchRemoteText, PrivateFeedError } from '../src/services/podcastService.ts';
 import { substackFeedEndpoint, substackFeedHeader } from '../src/services/substackFeed.ts';
 import { substackFeedPlugin } from '../server/substackFeed.ts';
 
@@ -68,4 +68,29 @@ test('the relay checks the destination before following a redirect', async t => 
   await handle({ method: 'POST', headers: { [substackFeedHeader]: feed } }, res);
   assert.equal(calls.mock.callCount(), 1);
   assert.equal(res.status, 502);
+});
+
+test('private remote files never reach a public proxy or the relay', async t => {
+  const file = 'https://api.substack.com/feed/podcast/12/chapters.json';
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    calls.push(url);
+    throw new TypeError('Failed to fetch');
+  });
+  await assert.rejects(fetchRemoteText(file, { privateSource: true }), AggregateError);
+  assert.deepEqual(calls, [file]);
+  await assert.rejects(fetchRemoteText('http://example.com/t.vtt', { privateSource: true }), PrivateFeedError);
+  assert.deepEqual(calls, [file]);
+});
+
+test('public remote files fall back to a proxy and send the requested Accept header', async t => {
+  const file = 'https://example.com/t.vtt';
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    calls.push([url, init.headers?.Accept]);
+    if (url === file) throw new TypeError('Failed to fetch');
+    return new Response('WEBVTT');
+  });
+  assert.equal(await fetchRemoteText(file, { accept: 'text/vtt' }), 'WEBVTT');
+  assert.deepEqual(calls, [[file, 'text/vtt'], ['https://api.allorigins.win/raw?url=' + encodeURIComponent(file), 'text/vtt']]);
 });

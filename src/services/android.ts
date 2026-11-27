@@ -112,7 +112,7 @@ export const AndroidConnectivity = registerPlugin<{
 }>('PodcastConnectivity');
 
 export const AndroidHttp = registerPlugin<{
-  get(options: { url: string; privateFeed?: boolean }): Promise<{ status: number; body: string }>;
+  get(options: { url: string; privateFeed?: boolean; accept?: string }): Promise<{ status: number; body: string }>;
 }>('PodcastHttp');
 
 export const AndroidDrive = registerPlugin<{

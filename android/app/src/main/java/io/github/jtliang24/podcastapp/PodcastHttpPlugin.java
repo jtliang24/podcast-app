@@ -23,7 +23,7 @@ public class PodcastHttpPlugin extends Plugin {
             HttpURLConnection connection = null;
             try {
                 connection = NativeRequests.open(call.getString("url"), privateFeed,
-                    "application/rss+xml, application/xml, text/xml, application/json", deadline);
+                    NativeRequests.acceptHeader(call.getString("accept")), deadline);
                 int status = connection.getResponseCode();
                 String body = "";
                 if (status >= 200 && status < 300) {
