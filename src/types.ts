@@ -42,6 +42,9 @@ export type SubscriptionSortDirection = 'ascending' | 'descending';
 export type CellularDownload = 'yes' | 'no' | 'ask';
 export const SKIP_INTERVALS = [10, 15, 30, 60] as const;
 export type SkipInterval = typeof SKIP_INTERVALS[number];
+export const MIN_SPEED = 0.5;
+export const MAX_SPEED = 3;
+export const SPEED_PRESETS = [0.8, 1, 1.2, 1.5, 1.8, 2] as const;
 
 export interface AppState {
   subscriptions: Podcast[];
@@ -62,6 +65,9 @@ export interface AppState {
   autoRemoveFinishedDownloads?: boolean;
   skipBackwardSeconds?: SkipInterval;
   skipForwardSeconds?: SkipInterval;
+  playbackSpeed?: number;
+  /** Per-podcast speed overrides, keyed by feedUrl. */
+  podcastPlaybackSpeeds?: Record<string, number>;
 }
 
 export const INITIAL_STATE: AppState = {

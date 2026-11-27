@@ -34,6 +34,19 @@ test('concurrent devices converge after rewinds, retries, removals and same-time
   assert.equal(phone.state.podcastSortOrders.feed, 'oldest');
 });
 
+test('playback speed overrides edited on two devices for different podcasts both survive', () => {
+  const phone = newProfile({ subscriptions: [show], playbackSpeed: 1 });
+  const desktop = newProfile({ subscriptions: [show], playbackSpeed: 1 });
+  recordEdit(phone, s => ({ ...s, podcastPlaybackSpeeds: { ...s.podcastPlaybackSpeeds, a: 1.5 }, playbackSpeed: 1.2 }), 'phone', false, 10);
+  recordEdit(desktop, s => ({ ...s, podcastPlaybackSpeeds: { ...s.podcastPlaybackSpeeds, b: 2 } }), 'desktop', false, 10);
+  const batches = [...phone.pending, ...desktop.pending].map(p => JSON.parse(JSON.stringify(p.batch)));
+  for (const batch of batches) applyBatch(phone, batch);
+  for (const batch of batches.toReversed()) applyBatch(desktop, batch);
+  assert.deepEqual(phone.state, desktop.state);
+  assert.deepEqual(phone.state.podcastPlaybackSpeeds, { a: 1.5, b: 2 });
+  assert.equal(phone.state.playbackSpeed, 1.2);
+});
+
 test('an initial offline edit overlays the legacy snapshot once', () => {
   const offline = newProfile();
   recordEdit(offline, position(30), 'phone');
@@ -44,7 +57,7 @@ test('an initial offline edit overlays the legacy snapshot once', () => {
 });
 
 test('legacy and unsupported library preferences use the same defaults', () => {
-  const defaults = { cellularDownload: 'ask', autoDownloadQueued: true, autoRemoveFinishedDownloads: false, skipBackwardSeconds: 15, skipForwardSeconds: 30 };
+  const defaults = { cellularDownload: 'ask', autoDownloadQueued: true, autoRemoveFinishedDownloads: false, skipBackwardSeconds: 15, skipForwardSeconds: 30, playbackSpeed: 1 };
   assert.deepEqual(getPreferences(newProfile().state), defaults);
   const imported = newProfile(JSON.parse('{"cellularDownload":"wifi","autoDownloadQueued":"off","autoRemoveFinishedDownloads":"true","skipBackwardSeconds":20,"skipForwardSeconds":"60"}'));
   assert.deepEqual(getPreferences(imported.state), defaults);
@@ -58,7 +71,7 @@ test('different preferences merge independently and survive a JSON round trip', 
   const exchange = (from, to) => applyBatch(to, JSON.parse(JSON.stringify(from.pending[0].batch)));
   exchange(phone, desktop);
   exchange(desktop, phone);
-  const expected = { cellularDownload: 'no', autoDownloadQueued: false, autoRemoveFinishedDownloads: true, skipBackwardSeconds: 10, skipForwardSeconds: 60 };
+  const expected = { cellularDownload: 'no', autoDownloadQueued: false, autoRemoveFinishedDownloads: true, skipBackwardSeconds: 10, skipForwardSeconds: 60, playbackSpeed: 1 };
   assert.deepEqual(getPreferences(phone.state), expected);
   assert.deepEqual(getPreferences(desktop.state), expected);
   const reopened = newProfile(JSON.parse(JSON.stringify(phone.state)));

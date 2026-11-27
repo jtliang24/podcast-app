@@ -6,11 +6,11 @@ export const routineUploadInterval = 30_000;
 
 const maps = [
   'playbackProgress', 'podcastSortOrders', 'playedEpisodes', 'hidePlayedEpisodes',
-  'podcastReleaseDates', 'podcastLastPlayed',
+  'podcastReleaseDates', 'podcastLastPlayed', 'podcastPlaybackSpeeds',
 ] as const;
 const fields = [
   'queue', 'newReleases', 'lastRefresh', 'lastPlayingEpisode',
-  'cellularDownload', 'autoDownloadQueued', 'autoRemoveFinishedDownloads', 'skipBackwardSeconds', 'skipForwardSeconds',
+  'cellularDownload', 'autoDownloadQueued', 'autoRemoveFinishedDownloads', 'skipBackwardSeconds', 'skipForwardSeconds', 'playbackSpeed',
   'subscriptionSortField', 'subscriptionSortDirection',
 ] as const;
 type MapField = typeof maps[number];
