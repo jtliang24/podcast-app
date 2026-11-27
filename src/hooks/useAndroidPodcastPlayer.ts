@@ -5,6 +5,7 @@ import type { AndroidPlaybackState } from '../services/android';
 import { androidPlaybackOpen, androidPlaybackQueue, androidPlaybackTrack, applyAndroidPlayback } from '../services/androidPlaybackState';
 import { resumePoint } from '../services/driveSync';
 import type { ResumePoint } from '../services/driveSync';
+import { speedFor } from '../services/preferences';
 import { formatTime } from './usePodcastPlayer';
 import type { UsePodcastPlayerProps } from './usePodcastPlayer';
 
@@ -91,16 +92,22 @@ export function useAndroidPodcastPlayer({
     };
   }, [open, ready, request, refreshDownloads]);
 
-  const { queue, subscriptions, playbackProgress } = state;
+  const { queue, subscriptions, playbackProgress, playbackSpeed, podcastPlaybackSpeeds } = state;
   useEffect(() => {
     if (ready) void request({ action: 'preferences', skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads });
   }, [ready, request, skipBackwardSeconds, skipForwardSeconds, autoRemoveFinishedDownloads]);
 
   useEffect(() => {
     if (ready) void request(() => ({ action: 'queue', queue: androidPlaybackQueue(storage.current.state) }));
-  }, [ready, queue, subscriptions, playbackProgress, acknowledgedRevision, request]);
+  }, [ready, queue, subscriptions, playbackProgress, playbackSpeed, podcastPlaybackSpeeds, acknowledgedRevision, request]);
 
   const currentEpisode = playback?.episode ?? null;
+  const currentId = currentEpisode?.id;
+  const currentSpeed = speedFor(state, currentEpisode?.podcastId);
+  // Change the current track's speed in place; queued tracks get theirs from the queue.
+  useEffect(() => {
+    if (ready && currentId) void request({ action: 'speed', episodeId: currentId, playbackSpeed: currentSpeed });
+  }, [ready, request, currentId, currentSpeed]);
   const playingPodcast = state.subscriptions.find(p => p.feedUrl === currentEpisode?.podcastId) ?? null;
   const offer = remoteOffer ?? resumePoint(state);
   const togglePlay = useCallback(() => {

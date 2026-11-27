@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyAndroidPlayback } from '../src/services/androidPlaybackState.ts';
+import { androidPlaybackOpen, androidPlaybackQueue, applyAndroidPlayback } from '../src/services/androidPlaybackState.ts';
 import { INITIAL_STATE } from '../src/types.ts';
 
 const episode = id => ({ id, title: id, audioUrl: `https://example.org/${id}.mp3`, duration: 60 });
@@ -86,4 +86,17 @@ test('recently played survives a completion and ignores seek-only or older check
   });
   assert.deepEqual(completed.podcastLastPlayed, { 'feed-a': 50, 'feed-b': 200 });
   assert.equal(completed.playbackProgress[secondTrack.audioUrl], undefined);
+});
+
+test('each track carries its own podcast speed', () => {
+  const overridden = { ...first, podcastId: 'feed-a' };
+  const global = { ...second, podcastId: 'feed-b' };
+  const state = {
+    ...INITIAL_STATE, playbackSpeed: 1.5, podcastPlaybackSpeeds: { 'feed-a': 2 },
+    queue: { primary: [overridden], secondary: [global, third] }, lastPlayingEpisode: global,
+  };
+  assert.deepEqual(androidPlaybackQueue(state).map(track => track.playbackSpeed), [2, 1.5, 1.5]);
+  assert.equal(androidPlaybackOpen(state).track?.playbackSpeed, 1.5);
+  assert.deepEqual(androidPlaybackQueue({ ...INITIAL_STATE, queue: { primary: [overridden], secondary: [] } })
+    .map(track => track.playbackSpeed), [1]);
 });

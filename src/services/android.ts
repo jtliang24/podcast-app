@@ -9,6 +9,8 @@ export interface AndroidTrack {
   podcastTitle?: string;
   artworkUrl?: string;
   time: number;
+  /** Speed for this track's podcast, so queued tracks keep their own speed. */
+  playbackSpeed: number;
 }
 
 export interface PlaybackChange {
@@ -36,7 +38,7 @@ export interface AndroidPlaybackState {
 
 interface PlaybackCommand {
   profile: string;
-  action: 'open' | 'snapshot' | 'queue' | 'select' | 'toggle' | 'seek' | 'skip' | 'preferences' | 'acknowledge';
+  action: 'open' | 'snapshot' | 'queue' | 'select' | 'toggle' | 'seek' | 'skip' | 'preferences' | 'acknowledge' | 'speed';
   queue?: AndroidTrack[];
   track?: AndroidTrack;
   autoplay?: boolean;
@@ -46,6 +48,9 @@ interface PlaybackCommand {
   skipBackwardSeconds?: number;
   skipForwardSeconds?: number;
   autoRemoveFinishedDownloads?: boolean;
+  /** For `speed`: the episode the speed applies to, ignored if another episode is now current. */
+  episodeId?: string;
+  playbackSpeed?: number;
 }
 
 export interface DownloadConnection {

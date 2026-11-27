@@ -1,14 +1,17 @@
 import type { AppState, Episode } from '../types.ts';
 import type { AndroidPlaybackState, AndroidTrack } from './android.ts';
 import { resumePoint } from './driveSync.ts';
-import { getPreferences } from './preferences.ts';
+import { getPreferences, speedFor } from './preferences.ts';
 import { recordPodcastPlay } from './subscriptionSort.ts';
 import { orderedQueue, removeQueuedEpisode } from './playbackQueue.ts';
 
 export function androidPlaybackTrack(state: AppState, episode: Episode,
   time = state.playbackProgress[episode.audioUrl]?.currentTime ?? 0): AndroidTrack {
   const podcast = state.subscriptions.find(p => p.feedUrl === episode.podcastId);
-  return { episode, time, podcastTitle: podcast?.title, artworkUrl: podcast?.artworkUrl };
+  return {
+    episode, time, podcastTitle: podcast?.title, artworkUrl: podcast?.artworkUrl,
+    playbackSpeed: speedFor(state, episode.podcastId),
+  };
 }
 
 export function androidPlaybackQueue(state: AppState) {

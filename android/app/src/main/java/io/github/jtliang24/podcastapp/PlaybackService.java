@@ -247,6 +247,9 @@ public class PlaybackService extends MediaSessionService {
                 case "preferences":
                     setPreferences(options);
                     break;
+                case "speed":
+                    setSpeed(options.optString("episodeId"), options.optDouble("playbackSpeed", 1));
+                    break;
                 case "acknowledge":
                     long acknowledged = options.getLong("revision");
                     for (Iterator<JSONObject> changes = pending.values().iterator(); changes.hasNext();) {
@@ -264,6 +267,13 @@ public class PlaybackService extends MediaSessionService {
     private void setPreferences(JSONObject options) {
         sessionPlayer.setSeekIncrements(options);
         autoRemoveFinishedDownloads = options.optBoolean("autoRemoveFinishedDownloads");
+    }
+
+    /** Changes the current track's speed without reloading it. A stale request for another episode is ignored. */
+    private void setSpeed(String episodeId, double speed) {
+        if (current == null || !current.id().equals(episodeId)) return;
+        current = current.at(current.position, Track.speed(speed));
+        player.setPlaybackSpeed((float) current.speed);
     }
 
     private final class SessionPlayer extends ForwardingSimpleBasePlayer {
@@ -364,6 +374,7 @@ public class PlaybackService extends MediaSessionService {
                 return;
             }
             queue.removeIf(waiting -> waiting.id().equals(track.id()));
+            player.setPlaybackSpeed((float) track.speed);
 
             File file = downloads.audio(track.episode.optString("id"));
             Uri uri;
@@ -496,27 +507,42 @@ public class PlaybackService extends MediaSessionService {
     }
 
     private static final class Track {
+        private static final double MIN_SPEED = 0.5;
+        private static final double MAX_SPEED = 3;
+
         final JSObject data;
         final JSONObject episode;
         final long position;
+        final double speed;
 
-        private Track(JSObject data, JSONObject episode, long position) {
+        private Track(JSObject data, JSONObject episode, long position, double speed) {
             this.data = data;
             this.episode = episode;
             this.position = position;
+            this.speed = speed;
         }
 
         static Track from(@Nullable JSONObject data) {
             if (data == null || data.optJSONObject("episode") == null) return null;
+            double speed = speed(data.optDouble("playbackSpeed", 1));
             JSObject track = new JSObject().put("episode", data.optJSONObject("episode"))
                 .put("time", data.optDouble("time", 0)).put("artworkUrl", data.optString("artworkUrl"))
-                .put("podcastTitle", data.optString("podcastTitle"));
-            return new Track(track, data.optJSONObject("episode"), Math.max(0, milliseconds(data.optDouble("time", 0))));
+                .put("podcastTitle", data.optString("podcastTitle")).put("playbackSpeed", speed);
+            return new Track(track, data.optJSONObject("episode"), Math.max(0, milliseconds(data.optDouble("time", 0))), speed);
+        }
+
+        static double speed(double value) {
+            return Double.isNaN(value) ? 1 : Math.min(MAX_SPEED, Math.max(MIN_SPEED, value));
         }
 
         Track at(long time) {
+            return at(time, speed);
+        }
+
+        Track at(long time, double speed) {
             return new Track(new JSObject().put("episode", episode).put("time", time / 1000.0)
-                .put("artworkUrl", data.optString("artworkUrl")).put("podcastTitle", data.optString("podcastTitle")), episode, time);
+                .put("artworkUrl", data.optString("artworkUrl")).put("podcastTitle", data.optString("podcastTitle"))
+                .put("playbackSpeed", speed), episode, time, speed);
         }
 
         String id() {
