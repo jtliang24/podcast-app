@@ -7,6 +7,8 @@ const FEED_REQUEST_TIMEOUT_MS = 10_000;
 const FEED_ACCEPT = 'application/rss+xml, application/xml, text/xml, application/json';
 
 const MAX_INLINE_CHAPTERS = 100;
+/** The largest remote text file (chapters, transcripts) read, matching Android's native HTTP limit. */
+export const MAX_REMOTE_TEXT_BYTES = 16 * 1024 * 1024;
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -69,6 +71,37 @@ interface SourceOptions {
   privateMessage: string;
   relayMessage: string;
   failureMessage: string;
+  /** Rejects a response body larger than this many bytes. Feeds leave it unset and are read whole. */
+  maxBytes?: number;
+}
+
+/**
+ * Reads a response body as UTF-8 text, as `response.text()` does, but rejects once it exceeds `maxBytes`: up
+ * front when `Content-Length` says so, otherwise while streaming, without reading the rest.
+ */
+export async function readCappedText(response: Response, maxBytes: number): Promise<string> {
+  const tooLarge = () => new Error(`Response is larger than ${maxBytes} bytes`);
+  if (Number(response.headers.get('Content-Length')) > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw tooLarge();
+  }
+  if (!response.body) return '';
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let size = 0;
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 /**
@@ -102,7 +135,7 @@ async function loadFromSources<T>(
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      return read(await response.text());
+      return read(options.maxBytes === undefined ? await response.text() : await readCappedText(response, options.maxBytes));
     } catch (err) {
       if (err instanceof PrivateFeedError) throw err;
       if (privateNative) throw new PrivateFeedError(options.privateMessage);
@@ -122,6 +155,7 @@ async function loadFromSources<T>(
  * Fetches a remote text file (chapters, transcripts) the way feeds are fetched: the publisher first, then
  * public proxies on the web. `privateSource` limits the request to a direct HTTPS fetch (or plain native HTTP on
  * Android, without the private-feed checks) and never uses a proxy or relay. `accept` defaults to the feed types.
+ * A source whose body exceeds `MAX_REMOTE_TEXT_BYTES` fails like any other.
  */
 export async function fetchRemoteText(
   url: string,
@@ -142,6 +176,7 @@ export async function fetchRemoteText(
       privateMessage: 'Could not load the private file.',
       relayMessage: 'Could not load the private file.',
       failureMessage: 'Failed to load remote file',
+      maxBytes: MAX_REMOTE_TEXT_BYTES,
     },
     text => text,
   );

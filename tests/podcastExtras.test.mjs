@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchPodcastFeed } from '../src/services/podcastService.ts';
+import { fetchPodcastFeed, fetchRemoteText, MAX_REMOTE_TEXT_BYTES, readCappedText } from '../src/services/podcastService.ts';
 import { clearExtrasCache, lookupExtras, resolveExtras } from '../src/services/episodeExtras.ts';
 
 const feedUrl = 'https://feed.example/show.rss';
@@ -121,4 +121,71 @@ test('extras kept for a downloaded old episode are used before the feed, so they
   const broken = async () => { throw new Error('no IndexedDB'); };
   const feed = async () => ({ podcast: {}, episodes: [{ ...oldEpisode, transcripts: kept.transcripts }] });
   assert.deepEqual((await resolveExtras(oldEpisode, feed, broken)).transcripts, kept.transcripts);
+});
+
+const MiB = 1024 * 1024;
+
+/** A body of `chunks` 1 MiB chunks with no Content-Length, counting the chunks actually pulled. */
+function streamedBody(chunks) {
+  const stats = { pulled: 0 };
+  const chunk = new Uint8Array(MiB).fill(0x61);
+  const body = new ReadableStream({
+    pull(controller) {
+      if (stats.pulled === chunks) return controller.close();
+      stats.pulled++;
+      controller.enqueue(chunk);
+    },
+  });
+  return { body, stats };
+}
+
+test('capped reads decode UTF-8 across chunks and reject bodies over the cap', async () => {
+  const bytes = new TextEncoder().encode('WEBVTT é ü');
+  const split = new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes.slice(0, 8));
+      controller.enqueue(bytes.slice(8));
+      controller.close();
+    },
+  });
+  assert.equal(await readCappedText(new Response(split), bytes.length), 'WEBVTT é ü');
+  assert.equal(await readCappedText(new Response(null), 10), '');
+  await assert.rejects(readCappedText(new Response('x'.repeat(11)), 10), /larger than 10 bytes/);
+  await assert.rejects(readCappedText(new Response('x', { headers: { 'Content-Length': '11' } }), 10), /larger than 10 bytes/);
+});
+
+test('remote extras larger than the cap fail like other sources and stop reading', async t => {
+  const file = 'https://t.example/huge.vtt';
+  const declared = String(MAX_REMOTE_TEXT_BYTES + 1);
+  t.mock.method(globalThis, 'fetch', async url => url === file
+    ? new Response('WEBVTT', { headers: { 'Content-Length': declared } })
+    : new Response('WEBVTT proxy'));
+  assert.equal(await fetchRemoteText(file, { accept: 'text/vtt' }), 'WEBVTT proxy', 'an oversized source falls through');
+
+  const streams = [];
+  t.mock.method(globalThis, 'fetch', async () => {
+    const streamed = streamedBody(MAX_REMOTE_TEXT_BYTES / MiB + 4);
+    streams.push(streamed.stats);
+    return new Response(streamed.body);
+  });
+  await assert.rejects(fetchRemoteText(file, { privateSource: true }), error => {
+    assert.ok(error instanceof AggregateError);
+    assert.match(error.errors[0].message, /^Publisher: Response is larger than/);
+    return true;
+  });
+  assert.equal(streams.length, 1);
+  assert.ok(streams[0].pulled <= MAX_REMOTE_TEXT_BYTES / MiB + 2, 'reading stops past the cap');
+
+  t.mock.method(globalThis, 'fetch', async () => {
+    const streamed = streamedBody(2);
+    return new Response(streamed.body);
+  });
+  assert.equal((await fetchRemoteText(file)).length, 2 * MiB);
+});
+
+test('feeds are not capped', async t => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(feedXml(item('one', '')), {
+    headers: { 'Content-Length': String(MAX_REMOTE_TEXT_BYTES + 1) },
+  }));
+  assert.equal((await fetchPodcastFeed(feedUrl)).episodes.length, 1);
 });
