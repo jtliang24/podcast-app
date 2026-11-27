@@ -90,6 +90,7 @@ function PlaybackTimeline({ currentTime, duration, seek, formatTime }: PlaybackT
 export default function NowPlayingScreen({
   ref, episode, podcast, isPlaying, togglePlay, skip, skipBackwardSeconds, skipForwardSeconds, playbackError, retry, speed, hasSpeedOverride, onSpeed, onSpeedOverride, sleep, ...timeline
 }: NowPlayingScreenProps) {
+  const remaining = timeline.formatTime((timeline.duration - timeline.currentTime) / speed);
   return (
     <dialog
       ref={ref}
@@ -132,8 +133,8 @@ export default function NowPlayingScreen({
           <PlaybackTimeline key={episode.audioUrl} {...timeline} />
           {speed !== 1 && Number.isFinite(timeline.duration) && timeline.duration > timeline.currentTime && (
             <p className="-mt-3 text-sm tabular-nums text-slate-400">
-              <span className="sr-only">Remaining at {formatSpeed(speed)} </span>
-              -{timeline.formatTime((timeline.duration - timeline.currentTime) / speed)} at {formatSpeed(speed)}
+              <span className="sr-only">{remaining} remaining at {formatSpeed(speed)}</span>
+              <span aria-hidden="true">-{remaining} at {formatSpeed(speed)}</span>
             </p>
           )}
 
